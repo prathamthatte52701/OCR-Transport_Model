@@ -186,6 +186,19 @@ async def test_clear_all_sixth_attempt_per_hour_is_429_before_password_check(
     assert (await _clear_all(client, other, dryRun=True)).status_code == 200  # per account
 
 
+@pytest.mark.usefixtures("limiter_on")
+async def test_clear_all_correct_password_does_not_use_up_the_budget(
+    client: Any, make_user: Any, db: Any
+) -> None:
+    """A right password is free: only wrong guesses count toward the hourly limit, so many
+    correct dry runs in a row never trip it (ported from CONSIGNOR MODEL)."""
+    adm, u = await make_user(role="admin"), await make_user()
+    await seed(db, u, "a", to_admin=adm)
+    for i in range(10):
+        r = await _clear_all(client, adm, dryRun=True)
+        assert r.status_code == 200, f"attempt {i + 1}: {r.status_code}"
+
+
 async def test_real_clear_writes_counts_only_audit_entry(
     client: Any, make_user: Any, db: Any
 ) -> None:

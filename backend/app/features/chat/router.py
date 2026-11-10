@@ -50,6 +50,24 @@ def _hit(request: Request, scope: str, per_hour: int) -> None:
         raise HTTPException(status_code=429, detail="Too many requests. Please try again later.")
 
 
+def _blocked(request: Request, scope: str, per_hour: int) -> bool:
+    """True when this account has already used up its budget (looks, does not count)."""
+    return limiter.enabled and not limiter.limiter.test(
+        RateLimitItemPerHour(per_hour), scope, user_or_ip_key(request)
+    )
+
+
+# Fixed-size pool of locks, indexed by key hash, so concurrent clear-all calls from the
+# same account are serialized without an unbounded dict (one lock per distinct key) that
+# would grow forever. A pool miss just means two unrelated keys occasionally share a lock,
+# which only adds harmless extra waiting, never a correctness problem.
+_CLEAR_ALL_LOCK_POOL = [asyncio.Lock() for _ in range(256)]
+
+
+def _clear_all_lock(key: str) -> asyncio.Lock:
+    return _CLEAR_ALL_LOCK_POOL[hash(key) % len(_CLEAR_ALL_LOCK_POOL)]
+
+
 @router.get("/admins")
 async def get_admins(current_user: CurrentUser = Depends(get_current_user)) -> list[dict]:
     _require_user(current_user)
@@ -288,22 +306,32 @@ async def clear_all(
 ) -> dict:
     db = get_database()
     _need_delete(body.dry_run, body.confirm)
-    # counted before the password is checked, so wrong guesses (dry run or real) use up the budget
-    _hit(request, "chat_clear_all", CLEAR_ALL_PER_HOUR)
-    user = await db.users.find_one({"_id": current_user.id}, {"passwordHash": 1})
-    if not user or "passwordHash" not in user:
-        await safe_log_action(current_user.id, "chat_clear_blocked", {"reason": "no_password"})
-        raise HTTPException(
-            status_code=400,
-            detail="This account has no password to confirm with.",
+    # Only WRONG passwords use up the hourly budget; a right one is free. The check, the
+    # password test and the count run under one per-account lock, so parallel guesses cannot
+    # all slip past the limit before the first wrong one is counted.
+    key = user_or_ip_key(request)
+    async with _clear_all_lock(key):
+        if _blocked(request, "chat_clear_all", CLEAR_ALL_PER_HOUR):
+            raise HTTPException(
+                status_code=429, detail="Too many requests. Please try again later."
+            )
+        user = await db.users.find_one({"_id": current_user.id}, {"passwordHash": 1})
+        if not user or "passwordHash" not in user:
+            await safe_log_action(current_user.id, "chat_clear_blocked", {"reason": "no_password"})
+            raise HTTPException(
+                status_code=400,
+                detail="This account has no password to confirm with.",
+            )
+        password = body.password
+        ok = isinstance(password, str) and await asyncio.to_thread(
+            verify_password, password, user["passwordHash"]
         )
-    password = body.password
-    ok = isinstance(password, str) and await asyncio.to_thread(
-        verify_password, password, user["passwordHash"]
-    )
-    if not ok:
-        await safe_log_action(current_user.id, "chat_clear_blocked", {"reason": "wrong_password"})
-        raise HTTPException(status_code=400, detail="Incorrect password.")
+        if not ok:
+            _hit(request, "chat_clear_all", CLEAR_ALL_PER_HOUR)
+            await safe_log_action(
+                current_user.id, "chat_clear_blocked", {"reason": "wrong_password"}
+            )
+            raise HTTPException(status_code=400, detail="Incorrect password.")
     if body.dry_run:
         res = await service.clear_all_full(db, current_user.id, True)
         return _with_files({"count": res["messages"]}, res)

@@ -10,6 +10,7 @@ from app.core.validators import validate_email
 # (128) so over-long NEW passwords still reach validate_password's message.
 MAX_USERNAME = 64
 MAX_EMAIL = 254
+MAX_LOGIN_EMAIL = 1000  # only bounds request size; login() enforces the real 254 limit
 MAX_PASSWORD = 128
 MAX_NOTE = 200
 
@@ -25,7 +26,9 @@ class SignupRequest(CamelModel):
 
 
 class LoginRequest(CamelModel):
-    email: str = Email
+    # Looser than MAX_EMAIL on purpose: an over-long address must get the same
+    # generic login failure as a wrong one (checked in login()), not a 422.
+    email: str = Field(max_length=MAX_LOGIN_EMAIL)
     password: str = Password
 
 

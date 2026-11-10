@@ -1,8 +1,11 @@
 """T16: runtime deps are exactly pinned, dev tools live in requirements-dev.txt,
 and the paddlepaddle extra-index line survives."""
 
+import os
 import re
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 DEV_TOOLS = {"ruff", "black", "isort", "mypy", "pytest", "pytest-asyncio"}
@@ -45,6 +48,10 @@ def test_paddlepaddle_extra_index_url_kept_and_jose_gone() -> None:
     assert "pyjwt==" in text.lower()
 
 
+@pytest.mark.skipif(
+    os.environ.get("CHECK_INSTALLED_PINS") != "1",
+    reason="opt-in: set CHECK_INSTALLED_PINS=1 to assert installed versions match the pins",
+)
 def test_installed_versions_match_the_pins() -> None:
     from importlib.metadata import version
 

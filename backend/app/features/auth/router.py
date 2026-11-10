@@ -35,6 +35,7 @@ from app.features.auth.password_requests import (
     sanitize_note,
 )
 from app.features.auth.schemas import (
+    MAX_EMAIL,
     ChangePasswordRequest,
     LoginRequest,
     MessageResponse,
@@ -138,6 +139,11 @@ async def login(request: Request, body: LoginRequest) -> TokenResponse:
     email = normalize_email(body.email)
     if not email or not body.password:
         raise HTTPException(status_code=400, detail="Email and password are required.")
+    if len(email) > MAX_EMAIL:
+        # Can never match an account; same answer as a wrong password, and the
+        # limiter and database never see the over-long key.
+        verify_password(body.password, DUMMY_PASSWORD_HASH)
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
     await enforce_login_email_limit(request, email)
 
     user = await db.users.find_one({"email": email})
