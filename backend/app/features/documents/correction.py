@@ -3,17 +3,32 @@
 
 from datetime import datetime
 
-AUTO_CORRECTED_FIELDS = ("taxInvoiceNo", "number", "date")
-NEEDS_REVIEW_FIELDS = ("taxInvoiceNo", "referenceNo", "number", "date")
+AUTO_CORRECTED_FIELDS = (
+    "date",
+    "packageCount",
+    "freight",
+    "deliveryCharge",
+    "demurrage",
+    "sgst",
+    "cgst",
+    "igst",
+    "totalAmount",
+)
+NEEDS_REVIEW_FIELDS = (
+    "date",
+    "receiptNumber",
+    "operatorGstin",
+    "consignorGstin",
+    "consigneeGstin",
+    "consignorPhone",
+    "consigneePhone",
+)
 
 
 def correction_set_fields(field: str, value: str, now: datetime) -> dict:
     set_fields: dict = {
         field: value,
         "edited": True,
-        # A correction changes what would be written to Excel - the previous
-        # export (if any) no longer reflects this document's current values.
-        "exported": False,
         "updatedAt": now,
     }
     if field in AUTO_CORRECTED_FIELDS:

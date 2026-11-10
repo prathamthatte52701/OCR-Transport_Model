@@ -1,4 +1,4 @@
-"""Index creation on the _test DB: exportedrows (documentId, userId) and the audit-log TTL.
+"""Index creation on the _test DB: the audit-log TTL.
 The TTL monitor is never waited for - only the index definition is checked."""
 
 from typing import Any
@@ -25,13 +25,9 @@ async def _clear_created_at(db: Any) -> None:
         await db.auditlogs.drop_index(ix["name"])
 
 
-async def test_exportedrows_document_user_index_exists(db: Any) -> None:
+async def test_ensure_indexes_is_idempotent(db: Any) -> None:
     await _ensure_indexes(db)
     await _ensure_indexes(db)  # idempotent
-    keys = [list(ix["key"].items()) async for ix in db.exportedrows.list_indexes()]
-    assert [("documentId", 1), ("userId", 1)] in keys
-    assert [("userId", 1), ("date", 1)] in keys
-    assert [("userId", 1), ("exportedAt", -1)] in keys  # existing one kept
 
 
 async def test_default_creates_ttl_on_single_field_created_at(db: Any) -> None:

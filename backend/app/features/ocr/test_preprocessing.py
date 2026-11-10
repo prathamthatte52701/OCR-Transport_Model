@@ -169,8 +169,8 @@ def full_page_with_table(table_dominant: bool = False) -> Image.Image:
     a block of buyer/tax filler fields (realistic invoice content between
     the header and the item table - the thing a *minimal* synthetic header
     would otherwise skip, understating the real gap), then a large
-    grid/table filling the rest. Used to verify crop_header's HEADER_CROP_RATIO
-    actually keeps the table out rather than assuming it. table_start_y is
+    grid/table filling the rest. Used to verify crop_header's full-page pass-through
+    (FULL_PAGE_RATIO). table_start_y is
     fixed regardless of page height (the header+filler block is a fixed
     layout, real documents don't stretch their header proportionally to
     however many item rows the table below happens to have)."""
@@ -358,37 +358,40 @@ def test_rotate_180_is_a_known_false_negative() -> None:
     assert ORIENTATION_CHECK_STEP not in steps
 
 
-def test_crop_header_keeps_table_out_for_normal_page() -> None:
-    from app.features.ocr.preprocessing import HEADER_CROP_RATIO, crop_header
-
-    page = full_page_with_table(table_dominant=False)
-    crop_bytes = crop_header(_to_png_bytes(page))
-    cropped = Image.open(io.BytesIO(crop_bytes))
-    expected_h = round(page.height * HEADER_CROP_RATIO)
-    assert cropped.height == expected_h
-    # table body starts at y=750 in the generator, well past HEADER_CROP_RATIO
-    # of a normally-proportioned page (720px here at 0.30) - confirms the
-    # "header cropping already avoids the table" assumption for realistic
-    # layouts.
-    assert expected_h < 750, "header crop unexpectedly reaches into the table body"
-
-
-def test_crop_header_can_leak_into_table_for_table_dominant_page() -> None:
-    # Documented, deliberately-not-"fixed" finding (see preprocessing.py's
-    # scope note): an unusually tall, table-dominant page inflates the
-    # HEADER_CROP_RATIO cutoff point past where the (fixed-position) table
-    # starts, because the ratio is of TOTAL page height, not of header
-    # content height. Pinned
-    # here as an explicit assertion of current behavior rather than "PP-Structure
-    # layout analysis wasn't needed" being an unverified assumption - it WAS
-    # verified, and it only holds for normally-proportioned pages.
-    from app.features.ocr.preprocessing import HEADER_CROP_RATIO, crop_header
+def test_crop_header_is_full_page_passthrough() -> None:
+    from app.features.ocr.preprocessing import FULL_PAGE_RATIO, crop_header
 
     page = full_page_with_table(table_dominant=True)
-    crop_bytes = crop_header(_to_png_bytes(page))
-    cropped = Image.open(io.BytesIO(crop_bytes))
-    expected_h = round(page.height * HEADER_CROP_RATIO)
-    assert cropped.height == expected_h
+    cropped = Image.open(io.BytesIO(crop_header(_to_png_bytes(page))))
+    assert FULL_PAGE_RATIO == 1.0
+    assert cropped.size == page.size
+
+
+def _two_copy_slip(seam: bool = True, width: int = 1400) -> bytes:
+    img = Image.new("RGB", (width, 640), "white")
+    draw = ImageDraw.Draw(img)
+    for i in range(8):
+        draw.text((30, 40 + i * 70), "Receipt row text", font=_font(30), fill="black")
+        draw.text((width // 2 + 150, 40 + i * 70), "Receipt row text", font=_font(30), fill="black")
+    if seam:
+        draw.line((840, 10, 840, 630), fill=(200, 40, 40), width=3)
+    return _to_png_bytes(img)
+
+
+def test_crop_left_copy_keeps_left_of_two_copy_slip() -> None:
+    from app.features.ocr.preprocessing import crop_left_copy
+
+    out = Image.open(io.BytesIO(crop_left_copy(_two_copy_slip())))
+    assert 830 <= out.width <= 850 and out.height == 640
+
+
+def test_crop_left_copy_never_touches_single_receipt() -> None:
+    from app.features.ocr.preprocessing import crop_left_copy
+
+    single = _to_png_bytes(make_clean_header())  # 1600x450 = 3.5:1 but no seam line
+    assert crop_left_copy(single) == single
+    narrow = _two_copy_slip(width=900)  # seam present, but normal aspect ratio
+    assert crop_left_copy(narrow) == narrow
 
 
 def test_pdf_text_layer_groups_label_with_its_own_row_not_reading_order() -> None:

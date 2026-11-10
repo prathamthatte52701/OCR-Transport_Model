@@ -21,18 +21,8 @@ from app.features.ocr import paddle_runner, pipeline
 from app.features.ocr.providers import errors
 from app.features.ocr.providers.errors import AIExtractionError
 
-TI = "Tax Invoice"
-DC = "Delivery Challan"
-FLAGS = (
-    "taxInvoiceNoNeedsReview",
-    "referenceNoNeedsReview",
-    "numberNeedsReview",
-    "taxInvoiceNoAutoCorrected",
-    "numberAutoCorrected",
-    "dateAutoCorrected",
-    "dateNeedsReview",
-)
-VALUES = ("taxInvoiceNo", "referenceNo", "number", "date")
+FLAGS = ex.EXTRACTION_FLAG_FIELDS
+VALUES = ex.EXTRACTION_VALUE_FIELDS
 ALLOWED_EXTRA = {
     "processingError",
     "processingErrorCode",
@@ -75,8 +65,8 @@ def env(monkeypatch: pytest.MonkeyPatch) -> Env:
     monkeypatch.setattr(pipeline, "run_ocr", lambda _p, **_k: e.ocr())
     monkeypatch.setattr(pipeline, "classify_page_orientation", lambda _b: (0, 1.0))
 
-    async def ai(document_type: str, _text: str) -> dict[str, Any]:
-        out = e.ai(document_type)
+    async def ai(_text: str, **_k: Any) -> dict[str, Any]:
+        out = e.ai(_text)
         if isinstance(out, BaseException):
             raise out
         return dict(out)
@@ -89,23 +79,17 @@ def env(monkeypatch: pytest.MonkeyPatch) -> Env:
     return e
 
 
-def ti_result(**over: Any) -> dict[str, Any]:
+def result(**over: Any) -> dict[str, Any]:
     base = ex.build_extraction_result(
-        TI, {"taxInvoiceNo": "TI/2526/000123", "referenceNo": "1234567", "date": "01/01/2026"}
+        {"receiptNumber": "TR/2526/000123", "operatorName": "ACME", "date": "01/01/2026"}
     )
     return {**base, **over}
 
 
-def dc_result(**over: Any) -> dict[str, Any]:
-    base = ex.build_extraction_result(DC, {"number": "DC/2526/000123", "date": "01/01/2026"})
-    return {**base, **over}
-
-
-async def _insert(db: Any, user: Any, doc_type: str = TI, **extra: Any) -> Any:
+async def _insert(db: Any, user: Any, **extra: Any) -> Any:
     doc = {
         "userId": user.id,
         "uploadStatus": "processed",
-        "documentType": doc_type,
         "isDeleted": False,
         "originalName": "a.png",
         "gridFsFileId": ObjectId(),
@@ -133,7 +117,7 @@ def _count_jobs(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, Any]]:
     jobs: list[tuple[Any, Any]] = []
 
     async def fake(doc_id: Any, *a: Any, **kw: Any) -> None:
-        run_id = kw.get("run_id", a[3] if len(a) > 3 else None)
+        run_id = kw.get("run_id", a[2] if len(a) > 2 else None)
         jobs.append((doc_id, run_id))
 
     monkeypatch.setattr(docs_router, "process_document", fake)
@@ -175,7 +159,7 @@ async def test_recent_uploaded_is_409_and_unchanged(
         user,
         uploadStatus="uploaded",
         updatedAt=datetime.now(UTC) - timedelta(minutes=1),
-        taxInvoiceNo="KEEP",
+        receiptNumber="KEEP",
         edited=True,
     )
     before = await _get(db, doc_id)
@@ -218,10 +202,10 @@ class Gate:
     def __init__(self, env: Env, first: Callable[[], Any]) -> None:
         self.release = asyncio.Event()
         self.calls = 0
-        self.result = ti_result()
+        self.result = result()
         self.first = first
 
-        async def ai(document_type: str, _text: str) -> dict[str, Any]:
+        async def ai(_text: str, **_k: Any) -> dict[str, Any]:
             n = self.calls
             self.calls += 1
             if n == 0:
@@ -245,13 +229,13 @@ async def _late_scenario(
     user = await make_user()
     doc_id = await _insert(db, user)
     job1 = asyncio.create_task(
-        pipeline.process_document(doc_id, PNG, "image/png", TI, run_id="old")
+        pipeline.process_document(doc_id, PNG, "image/png", run_id="old")
     )
     await _wait(lambda: _async(gate.calls >= 1))
     res = await _post(client, user, doc_id)  # job 2 runs inside the request
     assert res.status_code == 200, res.text
     mid = await _get(db, doc_id)
-    assert mid["uploadStatus"] == "processed" and mid["taxInvoiceNo"] == "TI/2526/000123"
+    assert mid["uploadStatus"] == "processed" and mid["receiptNumber"] == "TR/2526/000123"
     gate.release.set()
     await asyncio.wait_for(job1, 10)
     return mid
@@ -270,7 +254,7 @@ async def test_late_old_job_success_writes_nothing(
         db,
         make_user,
         monkeypatch,
-        lambda: ti_result(taxInvoiceNo="LATE", taxInvoiceNoNeedsReview=True),
+        lambda: result(receiptNumber="LATE", receiptNumberNeedsReview=True),
     )
     assert await _get(db, mid["_id"]) == mid
 
@@ -313,11 +297,11 @@ async def test_late_old_job_ocr_engine_error_after_new_success(
         return "NEW OCR TEXT"
 
     monkeypatch.setattr(pipeline, "run_ocr", ocr)
-    env.ai = lambda _t: ti_result()
+    env.ai = lambda _t: result()
     user = await make_user()
     doc_id = await _insert(db, user)
     job1 = asyncio.create_task(
-        pipeline.process_document(doc_id, PNG, "image/png", TI, run_id="old")
+        pipeline.process_document(doc_id, PNG, "image/png", run_id="old")
     )
     await _wait(lambda: _async(len(calls) >= 1))
     # the OCR slot is held by job 1, so job 2 only runs once job 1 ended: reverse order is fine
@@ -328,49 +312,49 @@ async def test_late_old_job_ocr_engine_error_after_new_success(
     res = await _post(client, user, doc_id)
     assert res.status_code == 200, res.text
     d = await _get(db, doc_id)
-    assert d["uploadStatus"] == "processed" and d["taxInvoiceNo"] == "TI/2526/000123"
+    assert d["uploadStatus"] == "processed" and d["receiptNumber"] == "TR/2526/000123"
 
 
 async def test_reverse_order_job2_overwrites(
     env: Env, client: Any, db: Any, make_user: Any
 ) -> None:
-    env.ai = lambda _t: ti_result(taxInvoiceNo="FIRST")
+    env.ai = lambda _t: result(receiptNumber="FIRST")
     user = await make_user()
     doc_id = await _insert(db, user)
-    await pipeline.process_document(doc_id, PNG, "image/png", TI, run_id="old")
-    assert (await _get(db, doc_id))["taxInvoiceNo"] == "FIRST"
-    env.ai = lambda _t: ti_result()
+    await pipeline.process_document(doc_id, PNG, "image/png", run_id="old")
+    assert (await _get(db, doc_id))["receiptNumber"] == "FIRST"
+    env.ai = lambda _t: result()
     assert (await _post(client, user, doc_id)).status_code == 200
     d = await _get(db, doc_id)
-    assert d["taxInvoiceNo"] == "TI/2526/000123" and d["uploadStatus"] == "processed"
+    assert d["receiptNumber"] == "TR/2526/000123" and d["uploadStatus"] == "processed"
 
 
 # 5
 async def test_legacy_document_without_run_id(
     env: Env, client: Any, db: Any, make_user: Any
 ) -> None:
-    env.ai = lambda _t: ti_result()
+    env.ai = lambda _t: result()
     user = await make_user()
     doc_id = await _insert(db, user, uploadStatus="uploaded")
     await db.documents.update_one({"_id": doc_id}, {"$unset": {"processingRunId": ""}})
-    await pipeline.process_document(doc_id, PNG, "image/png", TI)
+    await pipeline.process_document(doc_id, PNG, "image/png")
     d = await _get(db, doc_id)
-    assert d["uploadStatus"] == "processed" and d["taxInvoiceNo"] == "TI/2526/000123"
+    assert d["uploadStatus"] == "processed" and d["receiptNumber"] == "TR/2526/000123"
 
     await db.documents.update_one({"_id": doc_id}, {"$unset": {"processingRunId": ""}})
     assert (await _post(client, user, doc_id)).status_code == 200
     d = await _get(db, doc_id)
     assert isinstance(d["processingRunId"], str) and d["processingRunId"]
 
-    env.ai = lambda _t: ti_result(taxInvoiceNo="STALE")
+    env.ai = lambda _t: result(receiptNumber="STALE")
     before = await _get(db, doc_id)
-    await pipeline.process_document(doc_id, PNG, "image/png", TI, run_id=None)
+    await pipeline.process_document(doc_id, PNG, "image/png", run_id=None)
     assert await _get(db, doc_id) == before
 
 
 # 6
 async def test_recovery_sets_run_id_and_flags(env: Env, db: Any, make_user: Any) -> None:
-    env.ai = lambda _t: ti_result()
+    env.ai = lambda _t: result()
     user = await make_user()
     doc_id = await _insert(db, user, uploadStatus="uploaded")
     await db.documents.update_one({"_id": doc_id}, {"$unset": {"processingRunId": ""}})
@@ -379,18 +363,18 @@ async def test_recovery_sets_run_id_and_flags(env: Env, db: Any, make_user: Any)
     assert d["uploadStatus"] == "processed"
     assert isinstance(d["processingRunId"], str) and d["processingRunId"]
     assert all(isinstance(d[f], bool) for f in FLAGS)
-    assert d["taxInvoiceNo"] == "TI/2526/000123"
+    assert d["receiptNumber"] == "TR/2526/000123"
 
 
 async def test_recovery_claim_makes_older_job_stale(env: Env, db: Any, make_user: Any) -> None:
-    env.ai = lambda _t: ti_result()
+    env.ai = lambda _t: result()
     user = await make_user()
     doc_id = await _insert(db, user, uploadStatus="uploaded")  # run id "old"
     await docs_router.recover_interrupted_uploads()
     d = await _get(db, doc_id)
     assert d["processingRunId"] != "old"
-    env.ai = lambda _t: ti_result(taxInvoiceNo="STALE")
-    await pipeline.process_document(doc_id, PNG, "image/png", TI, run_id="old")
+    env.ai = lambda _t: result(receiptNumber="STALE")
+    await pipeline.process_document(doc_id, PNG, "image/png", run_id="old")
     assert await _get(db, doc_id) == d
 
 
@@ -411,14 +395,12 @@ async def test_upload_and_bulk_get_distinct_run_ids(
         "/api/documents/upload",
         headers=user.headers,
         files={"document": ("a.png", img, "image/png")},
-        data={"documentType": TI},
     )
     assert r.status_code == 201, r.text
     r = await client.post(
         "/api/documents/bulk-upload",
         headers=user.headers,
         files=[("documents", (f"{i}.png", img, "image/png")) for i in range(3)],
-        data={"documentTypes": [TI, DC, TI]},
     )
     assert r.status_code == 201, r.text
     docs = [d async for d in db.documents.find({"userId": user.id})]
@@ -439,7 +421,7 @@ async def test_generic_exception_is_processing_error(
     monkeypatch.setattr(pipeline, "check_upload", boom)
     user = await make_user()
     doc_id = await _insert(db, user, uploadStatus="uploaded")
-    await pipeline.process_document(doc_id, PNG, "image/png", TI, run_id="old")
+    await pipeline.process_document(doc_id, PNG, "image/png", run_id="old")
     d = await _get(db, doc_id)
     assert d["uploadStatus"] == "failed"
     assert d["processingErrorCode"] == "PROCESSING_ERROR"
@@ -447,7 +429,7 @@ async def test_generic_exception_is_processing_error(
 
     doc2 = await _insert(db, user, uploadStatus="uploaded", processingRunId="new")
     before = await _get(db, doc2)
-    await pipeline.process_document(doc2, PNG, "image/png", TI, run_id="old")
+    await pipeline.process_document(doc2, PNG, "image/png", run_id="old")
     assert await _get(db, doc2) == before
 
 
@@ -467,7 +449,7 @@ async def test_download_failure_after_claim(
 
     monkeypatch.setattr(docs_router, "download_buffer", bad)
     user = await make_user()
-    doc_id = await _insert(db, user, edited=True, exported=True)
+    doc_id = await _insert(db, user, edited=True)
     before = await _get(db, doc_id)
     res = await _post(client, user, doc_id)
     assert res.status_code == 500
@@ -476,12 +458,8 @@ async def test_download_failure_after_claim(
     d = await _get(db, doc_id)
     for key in (
         "uploadStatus",
-        "taxInvoiceNo",
-        "referenceNo",
-        "number",
-        "date",
+        *VALUES,
         "edited",
-        "exported",
         "processingError",
         "processingErrorCode",
         "processingRunId",
@@ -494,21 +472,21 @@ async def test_download_failure_after_claim(
 
 
 # 10
-async def _flagged(db: Any, user: Any, doc_type: str) -> Any:
-    return await _insert(db, user, doc_type, **dict.fromkeys(FLAGS, True), exported=True)
+async def _flagged(db: Any, user: Any) -> Any:
+    return await _insert(db, user, **dict.fromkeys(FLAGS, True))
 
 
 CLEARS = {
-    "taxInvoiceNo": ("taxInvoiceNoAutoCorrected", "taxInvoiceNoNeedsReview"),
-    "referenceNo": ("referenceNoNeedsReview",),
+    "receiptNumber": ("receiptNumberNeedsReview",),
     "date": ("dateAutoCorrected", "dateNeedsReview"),
-    "number": ("numberAutoCorrected", "numberNeedsReview"),
+    "operatorGstin": ("operatorGstinNeedsReview",),
+    "totalAmount": ("totalAmountAutoCorrected",),
 }
 VALUE_FOR = {
-    "taxInvoiceNo": "TI/2526/000999",
-    "referenceNo": "7654321",
+    "receiptNumber": "TR/2526/000999",
     "date": "02/02/2026",
-    "number": "DC/2526/000999",
+    "operatorGstin": "27AAPFU0939F1ZV",
+    "totalAmount": "1500",
 }
 
 
@@ -518,8 +496,7 @@ async def test_edit_clears_that_fields_flags(
     client: Any, db: Any, make_user: Any, who: str, field: str
 ) -> None:
     owner = await make_user()
-    doc_type = DC if field == "number" else TI
-    doc_id = await _flagged(db, owner, doc_type)
+    doc_id = await _flagged(db, owner)
     if who == "admin":
         admin = await make_user(role="admin")
         res = await client.patch(
@@ -536,7 +513,7 @@ async def test_edit_clears_that_fields_flags(
     assert res.status_code == 200, res.text
     d = await _get(db, doc_id)
     assert d[field] == VALUE_FOR[field]
-    assert d["edited"] is True and d["exported"] is False
+    assert d["edited"] is True
     for f in FLAGS:
         assert d[f] is (f not in CLEARS[field]), f
 
@@ -623,10 +600,9 @@ async def test_drift_guard_ai_failure_path(env: Env, db: Any, make_user: Any) ->
     derived = set(ex.EXTRACTION_DERIVED_FIELDS)
     env.ai = lambda _t: AIExtractionError("RATE_LIMIT")
     user = await make_user()
-    for dtype in (TI, DC):
-        doc_id = await _insert(db, user, dtype, uploadStatus="uploaded")
-        before = set(await _get(db, doc_id))
-        await pipeline.process_document(doc_id, PNG, "image/png", dtype, run_id="old")
-        d = await _get(db, doc_id)
-        assert d["uploadStatus"] == "failed"
-        assert (set(d) - before) <= derived | ALLOWED_EXTRA, (set(d) - before) - derived
+    doc_id = await _insert(db, user, uploadStatus="uploaded")
+    before = set(await _get(db, doc_id))
+    await pipeline.process_document(doc_id, PNG, "image/png", run_id="old")
+    d = await _get(db, doc_id)
+    assert d["uploadStatus"] == "failed"
+    assert (set(d) - before) <= derived | ALLOWED_EXTRA, (set(d) - before) - derived

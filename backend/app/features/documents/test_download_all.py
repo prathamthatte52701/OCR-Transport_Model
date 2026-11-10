@@ -24,8 +24,7 @@ async def _doc(db: Any, user: Any, data: bytes | None = b"hello", **over: Any) -
     now = datetime.now(UTC)
     d: dict[str, Any] = {
         "userId": user.id,
-        "documentType": "Delivery Challan",
-        "number": str(ObjectId())[-8:],
+        "receiptNumber": str(ObjectId())[-8:],
         "date": "15/03/2026",
         "originalFilename": "scan.pdf",
         "mimeType": "application/pdf",
@@ -86,7 +85,7 @@ async def test_zero_ids_is_422(client: Any, make_user: Any) -> None:
 
 async def test_over_id_cap_is_400(client: Any, make_user: Any) -> None:
     u = await make_user()
-    res = await client.post(URL, headers=u.headers, json=_ids([ObjectId() for _ in range(51)]))
+    res = await client.post(URL, headers=u.headers, json=_ids([ObjectId() for _ in range(31)]))
     assert res.status_code == 400
     assert res.json()["detail"] == "Select fewer documents."
     assert not docs_router._active_downloads
@@ -94,11 +93,11 @@ async def test_over_id_cap_is_400(client: Any, make_user: Any) -> None:
 
 async def test_exactly_id_cap_ok(client: Any, make_user: Any) -> None:
     u = await make_user()
-    res = await client.post(URL, headers=u.headers, json=_ids([ObjectId() for _ in range(50)]))
+    res = await client.post(URL, headers=u.headers, json=_ids([ObjectId() for _ in range(30)]))
     assert res.status_code == 200
     assert res.headers["x-download-included"] == "0"
-    assert res.headers["x-download-skipped"] == "50"
-    assert res.headers["x-download-total"] == "50"
+    assert res.headers["x-download-skipped"] == "30"
+    assert res.headers["x-download-total"] == "30"
 
 
 async def test_over_size_cap_is_413_and_reads_nothing(
@@ -126,9 +125,9 @@ async def test_happy_path_zip_and_headers(
     payloads = [os.urandom(1000 + i) for i in range(3)]
     # Same number+date twice (names must stay unique) and a traversal-style number.
     ids = [
-        await _doc(db, u, payloads[0], number="X1"),
-        await _doc(db, u, payloads[1], number="X1"),
-        await _doc(db, u, payloads[2], number="../../evil:name"),
+        await _doc(db, u, payloads[0], receiptNumber="X1"),
+        await _doc(db, u, payloads[1], receiptNumber="X1"),
+        await _doc(db, u, payloads[2], receiptNumber="../../evil:name"),
     ]
     res = await client.post(URL, headers=u.headers, json=_ids(ids))
     assert res.status_code == 200

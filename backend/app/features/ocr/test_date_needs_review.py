@@ -1,20 +1,14 @@
 """dateNeedsReview: a real but implausible date is flagged (never changed)."""
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 import pytest
 
-from app.core.date_window import date_implausible
 from app.features.documents.correction import correction_set_fields
-from app.features.excel.service import document_period
 from app.features.ocr import extraction as ex
 from app.features.ocr.extraction import build_extraction_result, empty_extraction_result
 
 TODAY = date(2026, 6, 15)
-
-
-def _fmt(d: date) -> str:
-    return d.strftime("%d/%m/%Y")
 
 
 @pytest.mark.parametrize(
@@ -48,23 +42,3 @@ def test_flag_in_flag_fields_and_correction() -> None:
         is False
     )
     assert "dateNeedsReview" not in correction_set_fields("number", "1", datetime(2026, 1, 1))
-
-
-def test_parity_with_document_period() -> None:
-    todays = [date(2026, 6, 15), date(2024, 2, 29), date(2026, 12, 31), date(2026, 1, 1)]
-    for today in todays:
-        now = datetime(today.year, today.month, today.day, 12)
-        probes: set[date] = set()
-        for base in (today, today.replace(day=28)):
-            for dy in (0, 1, 5, 6):
-                try:
-                    anchor = base.replace(year=base.year - dy)
-                except ValueError:
-                    anchor = base.replace(year=base.year - dy, day=28)
-                probes.update(anchor + timedelta(days=n) for n in (-2, -1, 0, 1, 2))
-        probes.update(
-            {date(today.year + 1, 1, 1), date(today.year, 12, 31), date(today.year, 2, 28)}
-        )
-        for p in probes:
-            s = _fmt(p)
-            assert date_implausible(s, today) is (not document_period(s, now)[2]), (today, s)

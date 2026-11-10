@@ -1,5 +1,5 @@
-"""Per-IP rate limits: single upload 120/h, bulk 30/h (separate budgets), signup 15/h,
-new-excel-file 20/h. The limiter is switched on only for these tests. OCR is mocked."""
+"""Per-IP rate limits: single upload 120/h, bulk 30/h (separate budgets), signup 15/h.
+The limiter is switched on only for these tests. OCR is mocked."""
 
 import io
 import uuid
@@ -45,7 +45,6 @@ async def _upload(client: Any, headers: dict[str, str]) -> Any:
         "/api/documents/upload",
         headers=headers,
         files={"document": ("a.png", PNG, "image/png")},
-        data={"documentType": "Tax Invoice"},
     )
 
 
@@ -54,7 +53,6 @@ async def _bulk(client: Any, headers: dict[str, str]) -> Any:
         "/api/documents/bulk-upload",
         headers=headers,
         files=[("documents", ("a.png", PNG, "image/png"))],
-        data={"documentTypes": ["Tax Invoice"]},
     )
 
 
@@ -112,20 +110,6 @@ async def test_signup_16th_limited(client: Any) -> None:
         )
         if i < 15:
             assert res.status_code != 429, f"signup {i + 1}: {res.text}"
-        else:
-            _assert_clean_429(res)
-
-
-async def test_new_excel_file_21st_limited(client: Any, make_user: Any) -> None:
-    u = await make_user()
-    for i in range(21):
-        res = await client.post(
-            "/api/documents/new-excel-file",
-            headers=u.headers,
-            json={"filename": f"book{i}_{uuid.uuid4().hex[:6]}"},
-        )
-        if i < 20:
-            assert res.status_code != 429, f"call {i + 1}: {res.text}"
         else:
             _assert_clean_429(res)
 

@@ -65,9 +65,6 @@ def _calls(a: Any, b: Any) -> list[tuple[str, str, Any]]:
         ("PATCH", uid, {"role": "user"}),
         ("PATCH", uid, {"role": "user", "username": "harmless"}),  # mixed-field bypass attempt
         ("PUT", f"{uid}/email", {"email": "hijack2@looptest.local"}),
-        ("POST", f"{uid}/reject", {"reason": "x"}),
-        ("POST", f"{uid}/reject", None),
-        ("POST", f"{uid}/approve", None),
         ("DELETE", f"{uid}/purge-range", _purge_range(a)),
         ("DELETE", f"{uid}/purge-months", _purge_months(a)),
     ]
@@ -107,14 +104,11 @@ async def test_concurrent_requests_cannot_bypass_the_check(
 
 async def test_admin_still_manages_regular_users(client: Any, make_user: Any, db: Any) -> None:
     a = await make_user(role="admin")
-    u = await make_user(status="pending")
+    u = await make_user()
     uid = f"/api/admin/users/{u.id}"
-    assert (await _send(client, a, "POST", f"{uid}/approve", None)).status_code == 200
     r = await _send(client, a, "PATCH", uid, {"username": "renamed1"})
     assert r.status_code == 200 and r.json()["user"]["username"] == "renamed1"
     r = await _send(client, a, "PUT", f"{uid}/email", {"email": "new1@looptest.local"})
-    assert r.status_code == 200
-    r = await _send(client, a, "POST", f"{uid}/reject", {"reason": "x"})
     assert r.status_code == 200
     r = await _send(client, a, "DELETE", f"{uid}/purge-range", _purge_range(a))
     assert r.status_code == 200
@@ -147,6 +141,4 @@ async def test_non_admin_and_bad_ids_keep_their_usual_errors(client: Any, make_u
     assert (await _send(client, a, "DELETE", "/api/admin/users/not-an-id", None)).status_code == 400
     missing = "64b7f0f0f0f0f0f0f0f0f0f0"
     r = await _send(client, a, "DELETE", f"/api/admin/users/{missing}", None)
-    assert r.status_code == 404
-    r = await _send(client, a, "POST", f"/api/admin/users/{missing}/approve", None)
     assert r.status_code == 404

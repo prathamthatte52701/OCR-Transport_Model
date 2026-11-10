@@ -42,7 +42,6 @@ async def test_single_upload_oversized_is_400_and_stores_nothing(
         "/api/documents/upload",
         headers=u.headers,
         files={"document": ("big.png", BOMB, "image/png")},
-        data={"documentType": "Tax Invoice"},
     )
     assert res.status_code == 400
     assert res.json()["detail"] == EXPECTED
@@ -62,7 +61,6 @@ async def test_single_upload_oversized_pdf_is_400(
         "/api/documents/upload",
         headers=u.headers,
         files={"document": ("big.pdf", pdf.tobytes(), "application/pdf")},
-        data={"documentType": "Tax Invoice"},
     )
     assert res.status_code == 400
     assert "PDF page is too large" in res.json()["detail"]
@@ -82,7 +80,6 @@ async def test_bulk_one_oversized_two_processed(
             ("documents", ("big.png", BOMB, "image/png")),
             ("documents", ("c.png", _png((300, 200)), "image/png")),
         ],
-        data={"documentTypes": ["Tax Invoice", "Tax Invoice", "Delivery Challan"]},
     )
     assert res.status_code == 201
     results = res.json()["results"]
@@ -102,7 +99,6 @@ async def test_normal_image_accepted(
         "/api/documents/upload",
         headers=u.headers,
         files={"document": ("ok.png", _png((4000, 3000)), "image/png")},  # 12 MP
-        data={"documentType": "Tax Invoice"},
     )
     assert res.status_code == 201
     assert len(calls) == 1
@@ -116,7 +112,6 @@ async def _insert_doc(db: Any, status: str = "uploaded", **extra: Any) -> Object
             "mimeType": "image/png",
             "gridFsFileId": ObjectId(),
             "uploadStatus": status,
-            "documentType": "Tax Invoice",
             "isDeleted": False,
             **extra,
         }
@@ -126,7 +121,7 @@ async def _insert_doc(db: Any, status: str = "uploaded", **extra: Any) -> Object
 
 async def test_process_document_oversized_marks_failed_without_raising(db: Any) -> None:
     doc_id = await _insert_doc(db)
-    await pipeline.process_document(doc_id, BOMB, "image/png", "Tax Invoice")
+    await pipeline.process_document(doc_id, BOMB, "image/png")
     doc = await db.documents.find_one({"_id": doc_id})
     assert doc["uploadStatus"] == "failed"
     assert doc["processingError"] == EXPECTED

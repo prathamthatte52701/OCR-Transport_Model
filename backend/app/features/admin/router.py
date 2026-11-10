@@ -57,13 +57,6 @@ NUKE_RATE_SCOPE = "admin_nuke"
 
 ADMIN_ONLY_SELF_MSG = "Admin accounts can only be changed by that admin."
 
-EDITABLE_FIELDS = {"taxInvoiceNo", "referenceNo", "number", "date"}
-FIELDS_BY_DOCUMENT_TYPE = {
-    "Tax Invoice": {"taxInvoiceNo", "referenceNo", "date"},
-    "Delivery Challan": {"number", "date"},
-}
-
-
 def _pagination(
     page: int | None, limit: int | None, default_limit: int = 30
 ) -> tuple[int, int, int]:
@@ -1179,8 +1172,6 @@ async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
         n_uploaded,
         n_processed,
         n_failed,
-        n_tax,
-        n_challan,
         total_documents,
         activity_24h,
         activity_7d,
@@ -1199,10 +1190,6 @@ async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
             db.documents.count_documents({**live, "uploadStatus": s})
             for s in ("uploaded", "processed", "failed")
         ),
-        *(
-            db.documents.count_documents({**live, "documentType": t})
-            for t in ("Tax Invoice", "Delivery Challan")
-        ),
         db.documents.count_documents(live),
         db.auditlogs.count_documents({"createdAt": {"$gte": day_ago}}),
         db.auditlogs.count_documents({"createdAt": {"$gte": week_ago}}),
@@ -1218,7 +1205,6 @@ async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
         db.passwordresetrequests.count_documents({"status": "open"}),
     )
     by_status = {"uploaded": n_uploaded, "processed": n_processed, "failed": n_failed}
-    by_type = {"Tax Invoice": n_tax, "Delivery Challan": n_challan}
     finished = n_processed + n_failed
     ocr_failure_rate = round((n_failed / finished) * 1000) / 10 if finished > 0 else 0
 
@@ -1245,7 +1231,6 @@ async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
         "totalUsers": total_users,
         "totalDocuments": total_documents,
         "documentsByStatus": by_status,
-        "documentsByType": by_type,
         "ocrFailureRate": ocr_failure_rate,
         "recentActivity": {"last24h": activity_24h, "last7d": activity_7d},
         "passwordRequests": {"count": password_requests_open},

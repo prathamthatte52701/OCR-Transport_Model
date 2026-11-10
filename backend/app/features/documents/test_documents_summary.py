@@ -11,8 +11,6 @@ KEYS = {
     "processed",
     "failed",
     "processedToday",
-    "processedTodayByType",
-    "byDocumentType",
     "recent",
 }
 DAY = timedelta(days=1)
@@ -29,8 +27,7 @@ def _doc(owner: Any, n: int, **kw: Any) -> dict[str, Any]:
         "userId": owner.id,
         "originalFilename": f"f{n}.pdf",
         "uploadStatus": "processed",
-        "documentType": "Delivery Challan",
-        "number": f"N{n}",
+        "receiptNumber": f"N{n}",
         "edited": False,
         "createdAt": base,
         "updatedAt": base,
@@ -64,10 +61,6 @@ def _expected(docs: list[dict[str, Any]]) -> dict[str, Any]:
         "processed": sum(d["uploadStatus"] == "processed" for d in live),
         "failed": sum(d["uploadStatus"] == "failed" for d in live),
         "processedToday": today,
-        "byDocumentType": {
-            t: sum(d["documentType"] == t for d in live)
-            for t in ("Tax Invoice", "Delivery Challan")
-        },
     }
 
 
@@ -89,8 +82,6 @@ async def test_empty_user(client: Any, make_user: Any) -> None:
         "processed": 0,
         "failed": 0,
         "processedToday": 0,
-        "processedTodayByType": {"Tax Invoice": 0, "Delivery Challan": 0},
-        "byDocumentType": {"Tax Invoice": 0, "Delivery Challan": 0},
         "recent": [],
     }
 
@@ -99,16 +90,15 @@ async def test_mixed_matches_bruteforce(client: Any, db: Any, make_user: Any) ->
     a, b = await make_user(), await make_user()
     docs = [
         _doc(a, 1, uploadStatus="uploaded"),
-        _doc(a, 2, documentType="Tax Invoice", taxInvoiceNo="G1", referenceNo="R1"),
+        _doc(a, 2, receiptNumber="G1"),
         _doc(a, 3, uploadStatus="failed"),
-        _doc(a, 4, documentType="Tax Invoice", uploadStatus="failed"),
-        _doc(a, 5, documentType="Weird Type"),
+        _doc(a, 4, uploadStatus="failed"),
         _doc(a, 6, isDeleted=True),
         _doc(a, 7, isDeleted=False),
         _doc(a, 8),  # isDeleted missing
         _doc(a, 9, uploadStatus="failed", isDeleted=True),
         _doc(b, 10),
-        _doc(b, 11, documentType="Tax Invoice"),
+        _doc(b, 11),
     ]
     await db.documents.insert_many(docs)
     mine = [d for d in docs if d["userId"] == a.id]
@@ -116,8 +106,6 @@ async def test_mixed_matches_bruteforce(client: Any, db: Any, make_user: Any) ->
     exp = _expected(mine)
     assert {k: got[k] for k in exp} == exp
     assert set(got) == KEYS
-    by_type = got["byDocumentType"]
-    assert by_type["Tax Invoice"] + by_type["Delivery Challan"] < got["total"]
     live = sorted(
         (d for d in mine if d.get("isDeleted") is not True),
         key=lambda d: (d["createdAt"], d["_id"]),
@@ -179,34 +167,6 @@ async def test_processed_today_boundaries(client: Any, db: Any, make_user: Any) 
     assert got["processedToday"] == _expected([c[0] for c in cases])["processedToday"]
 
 
-async def test_processed_today_by_type(client: Any, db: Any, make_user: Any) -> None:
-    a, b = await make_user(), await make_user()
-    start, end = _bounds()
-    mid = start + timedelta(hours=12)
-    tax, challan = "Tax Invoice", "Delivery Challan"
-    await db.documents.insert_many(
-        [
-            _doc(a, 1, documentType=tax, processedAt=mid),
-            _doc(a, 2, documentType=tax, processedAt=start),
-            _doc(a, 3, documentType=challan, processedAt=mid),
-            _doc(a, 4, documentType=tax, processedAt=start - timedelta(minutes=1)),  # 23:59 IST
-            _doc(a, 5, documentType=challan, processedAt=end),  # 00:00 IST tomorrow
-            _doc(a, 6, documentType=tax, uploadStatus="failed", processedAt=mid),
-            _doc(a, 7, documentType=challan, isDeleted=True, processedAt=mid),
-            _doc(a, 8, documentType="Weird Type", processedAt=mid),
-            _doc(a, 9, documentType="UNSET", processedAt=mid),
-            _doc(b, 10, documentType=tax, processedAt=mid),
-            _doc(b, 11, documentType=challan, processedAt=mid),
-        ]
-    )
-    got = await _get(client, a)
-    assert got["processedTodayByType"] == {tax: 2, challan: 1}
-    assert got["processedToday"] == 5  # the other-type and typeless docs count here only
-    assert got["byDocumentType"] == {tax: 4, challan: 2}
-    other = await _get(client, b)
-    assert other["processedTodayByType"] == {tax: 1, challan: 1}
-
-
 async def test_isolation(client: Any, db: Any, make_user: Any) -> None:
     a, b = await make_user(), await make_user()
     mid = _bounds()[0] + timedelta(hours=12)
@@ -221,7 +181,6 @@ async def test_camel_case_shape(client: Any, db: Any, make_user: Any) -> None:
     await db.documents.insert_one(_doc(u, 1))
     got = await _get(client, u)
     assert set(got) == KEYS
-    assert set(got["byDocumentType"]) == {"Tax Invoice", "Delivery Challan"}
 
 
 async def test_large_account_response_is_small(client: Any, db: Any, make_user: Any) -> None:

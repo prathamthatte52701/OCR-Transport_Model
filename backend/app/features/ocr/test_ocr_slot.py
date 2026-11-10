@@ -194,7 +194,6 @@ async def _doc(db: Any, make_user: Any) -> ObjectId:
     doc = {
         "userId": user.id,
         "uploadStatus": "uploaded",
-        "documentType": "Delivery Challan",
         "isDeleted": False,
         "originalName": "a.png",
         "mimeType": "image/png",
@@ -206,8 +205,8 @@ async def _doc(db: Any, make_user: Any) -> ObjectId:
 
 @pytest.fixture
 def fake_ai(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def ai(_t: str, _text: str) -> dict[str, Any]:
-        return {"number": "123", "date": "01/01/2026"}
+    async def ai(_text: str, **_k: Any) -> dict[str, Any]:
+        return {"receiptNumber": "123", "date": "01/01/2026"}
 
     monkeypatch.setattr(pipeline, "extract_header", ai)
 
@@ -217,11 +216,11 @@ async def test_process_document_wedged_stuck(
 ) -> None:
     await timed_out_orphan(fake)
     waiting_id = await _doc(db, make_user)
-    waiting = asyncio.create_task(pipeline.process_document(waiting_id, PNG, "image/png", "x"))
+    waiting = asyncio.create_task(pipeline.process_document(waiting_id, PNG, "image/png"))
     await until(lambda: st()["wedged"], 3)
     await asyncio.wait_for(waiting, 2)
     new_id = await _doc(db, make_user)
-    await asyncio.wait_for(pipeline.process_document(new_id, PNG, "image/png", "x"), 2)
+    await asyncio.wait_for(pipeline.process_document(new_id, PNG, "image/png"), 2)
     for did in (waiting_id, new_id):
         d = await db.documents.find_one({"_id": did})
         assert d["uploadStatus"] == "failed"
@@ -230,7 +229,7 @@ async def test_process_document_wedged_stuck(
     fake.gate.set()
     await until(lambda: not st()["held"])
     heal_id = await _doc(db, make_user)
-    await pipeline.process_document(heal_id, PNG, "image/png", "x")
+    await pipeline.process_document(heal_id, PNG, "image/png")
     assert (await db.documents.find_one({"_id": heal_id}))["uploadStatus"] == "processed"
 
 
@@ -239,7 +238,7 @@ async def test_process_document_plain_timeout(
 ) -> None:
     fake.block_first = True
     did = await _doc(db, make_user)
-    await asyncio.wait_for(pipeline.process_document(did, PNG, "image/png", "x"), 3)
+    await asyncio.wait_for(pipeline.process_document(did, PNG, "image/png"), 3)
     d = await db.documents.find_one({"_id": did})
     assert d["uploadStatus"] == "failed"
     assert d["processingError"] == TIMEOUT_MSG

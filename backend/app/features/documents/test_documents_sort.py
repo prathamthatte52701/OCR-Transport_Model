@@ -5,14 +5,12 @@ from typing import Any
 
 import pytest
 
-SORT_KEYS = ["documentType", "number", "date", "uploadStatus", "edited", "createdAt"]
+SORT_KEYS = ["number", "date", "uploadStatus", "edited", "createdAt"]
 BASE = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def _display_number(d: dict[str, Any]) -> str:
-    if d.get("documentType") == "Tax Invoice":
-        return " / ".join(p for p in (d.get("taxInvoiceNo"), d.get("referenceNo")) if p)
-    return d.get("number") or ""
+    return d.get("receiptNumber") or ""
 
 
 def _date_key(d: dict[str, Any]) -> str:
@@ -25,12 +23,12 @@ def _date_key(d: dict[str, Any]) -> str:
 
 
 def _key(sort: str, d: dict[str, Any]) -> Any:
-    if sort in ("documentType", "uploadStatus"):
+    if sort == "uploadStatus":
         return d[sort].lower()
     if sort == "edited":
         return bool(d.get("edited"))
     if sort == "number":
-        return _display_number(d)
+        return _display_number(d).lower()
     if sort == "date":
         return _date_key(d)
     return d["createdAt"]
@@ -42,7 +40,6 @@ def _doc(owner: Any, n: int, **kw: Any) -> dict[str, Any]:
         "userId": owner.id,
         "originalFilename": f"f{n}.pdf",
         "uploadStatus": "processed",
-        "documentType": "Delivery Challan",
         "edited": False,
         "isDeleted": False,
         "createdAt": t,
@@ -85,27 +82,26 @@ def _check_order(
 @pytest.fixture
 async def mixed(db: Any, make_user: Any) -> Any:
     u, other = await make_user(), await make_user()
-    tax = "Tax Invoice"
     docs = [
-        _doc(u, 1, documentType=tax, taxInvoiceNo="G0027704827", referenceNo="9800592335"),
-        _doc(u, 2, documentType=tax, taxInvoiceNo="A100"),
-        _doc(u, 3, documentType=tax, referenceNo="R5"),
-        _doc(u, 4, documentType=tax),
-        _doc(u, 5, number="B200", date="01/02/2026", uploadStatus="uploaded"),
-        _doc(u, 6, number="C300", date="15/01/2026", edited=True, uploadStatus="failed"),
-        _doc(u, 7, number="A050", date="31/12/2025", edited="UNSET"),
-        _doc(u, 8, number=None, date="05/03/2025"),
+        _doc(u, 1, receiptNumber="G0027704827"),
+        _doc(u, 2, receiptNumber="A100"),
+        _doc(u, 3, receiptNumber="a100"),
+        _doc(u, 4),
+        _doc(u, 5, receiptNumber="B200", date="01/02/2026", uploadStatus="uploaded"),
+        _doc(u, 6, receiptNumber="C300", date="15/01/2026", edited=True, uploadStatus="failed"),
+        _doc(u, 7, receiptNumber="A050", date="31/12/2025", edited="UNSET"),
+        _doc(u, 8, receiptNumber=None, date="05/03/2025"),
         _doc(u, 9),  # number and date missing
-        _doc(u, 10, number="Z9", date=None),
-        _doc(u, 11, number="Y9", date=""),
-        _doc(u, 12, number="X9", date="2026-01-05"),
-        _doc(u, 13, number="W9", date="abc"),
-        _doc(u, 14, number="V9", date="5/1/2026"),
-        _doc(u, 15, documentType=tax, taxInvoiceNo="M1", date="10/10/2026", edited=True),
+        _doc(u, 10, receiptNumber="Z9", date=None),
+        _doc(u, 11, receiptNumber="Y9", date=""),
+        _doc(u, 12, receiptNumber="X9", date="2026-01-05"),
+        _doc(u, 13, receiptNumber="W9", date="abc"),
+        _doc(u, 14, receiptNumber="V9", date="5/1/2026"),
+        _doc(u, 15, receiptNumber="M1", date="10/10/2026", edited=True),
     ]
     await db.documents.insert_many(docs)
     await db.documents.insert_many(
-        [_doc(other, 100 + i, number=f"OTHER{i}", date="01/01/2020") for i in range(5)]
+        [_doc(other, 100 + i, receiptNumber=f"OTHER{i}", date="01/01/2020") for i in range(5)]
     )
     return u, docs
 
@@ -138,12 +134,12 @@ async def test_date_chronological_and_empty_group_position(client: Any, mixed: A
     assert [k for k in asc if k][:4] == ["20250305", "20251231", "20260115", "20260201"]
 
 
-async def test_number_uses_displayed_value(client: Any, mixed: Any) -> None:
+async def test_number_sorts_by_receipt_number(client: Any, mixed: Any) -> None:
     u, docs = mixed
     got = await _walk(client, u, sort="number", order="asc")
     by_id = {str(d["_id"]): d for d in docs}
-    shown = [_display_number(by_id[d["_id"]]) for d in got]
-    assert "G0027704827 / 9800592335" in shown
+    shown = [_display_number(by_id[d["_id"]]).lower() for d in got]
+    assert "g0027704827" in shown
     assert shown == sorted(shown)
 
 
@@ -158,7 +154,7 @@ async def test_case_only_differences_group_together(client: Any, db: Any, make_u
         assert low == sorted(low, reverse=order == "desc")
 
 
-@pytest.mark.parametrize("sort", ["uploadStatus", "date", "documentType", "edited", "number"])
+@pytest.mark.parametrize("sort", ["uploadStatus", "date", "edited", "number"])
 @pytest.mark.parametrize("order", ["asc", "desc"])
 async def test_stable_paging_with_many_ties(
     client: Any, db: Any, make_user: Any, sort: str, order: str
@@ -172,9 +168,8 @@ async def test_stable_paging_with_many_ties(
             i,
             uploadStatus=statuses[i % 3],
             date=dates[i % 4],
-            number=f"N{i % 2}",
+            receiptNumber=f"N{i % 2}",
             edited=i % 2 == 0,
-            documentType="Tax Invoice" if i % 5 == 0 else "Delivery Challan",
         )
         for i in range(45)
     ]
@@ -187,13 +182,13 @@ async def test_stable_paging_with_many_ties(
 
 async def test_sort_with_filters(client: Any, mixed: Any) -> None:
     u, docs = mixed
-    tax = [d for d in docs if d["documentType"] == "Tax Invoice"]
-    got = await _walk(client, u, sort="number", order="desc", documentType="Tax Invoice")
-    _check_order("number", "desc", got, tax)
+    a100 = [d for d in docs if "a100" in (d.get("receiptNumber") or "").lower()]
+    got = await _walk(client, u, sort="number", order="desc", number="a100")
+    _check_order("number", "desc", got, a100)
     res = await client.get(
         "/api/documents",
         headers=u.headers,
-        params={"page": 1, "limit": 3, "sort": "date", "order": "asc", "number": "9800592335"},
+        params={"page": 1, "limit": 3, "sort": "date", "order": "asc", "number": "G0027704827"},
     )
     body = res.json()
     assert body["totalDocuments"] == 1 and len(body["documents"]) == 1

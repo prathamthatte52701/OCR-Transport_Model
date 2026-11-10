@@ -17,7 +17,6 @@ from fastapi import (
     BackgroundTasks,
     Depends,
     File,
-    Form,
     HTTPException,
     Query,
     Request,
@@ -43,7 +42,9 @@ from app.features.documents.correction_rules import (
     check_request,
     validate_correction,
 )
+from app.features.documents.duplicate import refresh_duplicate_flag
 from app.features.documents.gridfs_service import delete_file, download_buffer, upload_buffer
+from app.features.documents.warnings import compute_warnings
 from app.features.documents.schemas import (
     CorrectRequest,
     DeleteResponse,
@@ -51,7 +52,11 @@ from app.features.documents.schemas import (
     MessageResponse,
     PurgeFileResponse,
 )
-from app.features.ocr.extraction import extraction_reset_ops
+from app.features.ocr.extraction import (
+    EXTRACTION_FLAG_FIELDS,
+    empty_extraction_result,
+    extraction_reset_ops,
+)
 from app.features.ocr.pipeline import process_document
 from app.features.ocr.preprocessing import get_pdf_page_count
 from app.features.ocr.providers.errors import PROCESSING_ERROR, user_message
@@ -60,7 +65,7 @@ MONTH_RE = re.compile(r"^(20\d{2}|2100)-(0[1-9]|1[0-2])$")
 
 router = APIRouter()
 
-DOCUMENT_TYPES = {"Tax Invoice", "Delivery Challan"}
+DOCUMENT_TYPE = "Transport Receipt"  # the one and only type; written automatically
 # Legacy rolling windows from "now" (?range=), kept for old callers. The My Documents chips send
 # a calendar-based ?uploadedFrom= (start of day/week/month/year in the USER's timezone) instead.
 RANGE_DAYS = {"today": 1, "week": 7, "month": 30, "year": 365}
@@ -68,9 +73,9 @@ MAX_PAGE_SIZE = 100
 REPROCESS_STUCK_AFTER = timedelta(minutes=10)
 MAX_PAGE_NUMBER = 100_000
 MAX_FILE_SIZE = 5 * 1024 * 1024
-MAX_BULK_FILES = 10
-MAX_DOWNLOAD_ALL_IDS = 50
-MAX_DOWNLOAD_ALL_BYTES = 150 * 1024 * 1024
+MAX_BULK_FILES = 5
+MAX_DOWNLOAD_ALL_IDS = 30
+MAX_DOWNLOAD_ALL_BYTES = 100 * 1024 * 1024
 # A running download-all holds its user's slot at most this long; an older slot is treated as
 # free, so a leaked slot (cancelled task, bug) heals itself instead of blocking the user forever.
 DOWNLOAD_SLOT_TIMEOUT_SECONDS = 10 * 60
@@ -140,16 +145,14 @@ _EXTENSION_BY_MIME = {
 
 def _zip_entry_name(doc: dict, seen: dict[str, int]) -> str:
     """Builds a distinguishable in-archive filename from the document's own
-    identifying number/date - e.g. "TI-482910_15-03-2026.pdf" - rather than
+    receipt number/date - e.g. "TR-482910_15-03-2026.pdf" - rather than
     a generic id-based name, so extracted files are recognizable at a
     glance. `seen` dedupes within one zip (same number+date could repeat
     across genuinely different documents)."""
-    if doc["documentType"] == "Tax Invoice":
-        parts = [p for p in (doc.get("taxInvoiceNo"), doc.get("referenceNo")) if p]
-        base = "-".join(parts) if parts else str(doc["_id"])
-    else:
-        base = doc.get("number") or str(doc["_id"])
-    if doc.get("date"):
+    base = doc.get("receiptNumber") or _name_from_original_filename(
+        doc.get("originalFilename") or ""
+    )
+    if base and doc.get("date"):
         base = f"{base}_{doc['date'].replace('/', '-')}"
 
     ext = PurePosixPath(doc.get("originalFilename") or "").suffix
@@ -182,18 +185,10 @@ async def read_limited(upload: UploadFile, limit: int = MAX_FILE_SIZE) -> bytes 
 
 
 async def _validate_and_store(
-    buffer: bytes, mime_type: str, original_name: str, document_type: str, user_id: ObjectId
+    buffer: bytes, mime_type: str, original_name: str, user_id: ObjectId
 ) -> dict:
     """Raises HTTPException on validation failure; otherwise creates the
     Document row and returns it (uploadStatus 'uploaded', not yet processed)."""
-    if document_type not in DOCUMENT_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Please choose a document type - Tax Invoice or Delivery Challan - "
-                "before uploading."
-            ),
-        )
     if len(buffer) > MAX_FILE_SIZE:
         raise HTTPException(status_code=400, detail="File size must be 5 MB or less.")
     if mime_type not in ALLOWED_MIME_TYPES:
@@ -216,8 +211,8 @@ async def _validate_and_store(
                     "Could not read this PDF. Please upload a valid PDF or convert it to JPG/PNG."
                 ),
             )
-        if pages > 4:
-            raise HTTPException(status_code=400, detail="PDF must be 4 pages or less.")
+        if pages > 1:
+            raise HTTPException(status_code=400, detail="PDF must be a single page.")
 
     # Pixel-size check BEFORE anything is stored: a tiny file can decode to GBs of RAM.
     try:
@@ -242,18 +237,11 @@ async def _validate_and_store(
                 "uploadStatus": "uploaded",
                 # identity of the processing job that owns this document: only that job may write
                 "processingRunId": uuid4().hex,
-                "documentType": document_type,
-                "taxInvoiceNo": None,
-                "referenceNo": None,
-                "number": None,
-                "date": None,
-                "taxInvoiceNoAutoCorrected": None,
-                "numberAutoCorrected": None,
-                "dateAutoCorrected": None,
+                "documentType": DOCUMENT_TYPE,
+                **empty_extraction_result(),
                 "filePurged": False,
                 "filePurgedAt": None,
                 "edited": False,
-                "exported": False,
                 "isDeleted": False,
                 "createdAt": now,
                 "updatedAt": now,
@@ -276,7 +264,6 @@ async def _validate_and_store(
         {
             "documentId": str(doc["_id"]),
             "filename": original_name,
-            "documentType": document_type,
         },
     )
     return doc
@@ -288,7 +275,6 @@ async def upload_document(
     request: Request,
     background_tasks: BackgroundTasks,
     document: UploadFile = File(...),
-    document_type: str = Form(..., alias="documentType"),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> dict:
     """Rate limited - every upload triggers real PaddleOCR + Groq work
@@ -306,7 +292,6 @@ async def upload_document(
         buffer,
         document.content_type or "",
         document.filename or "upload",
-        document_type,
         current_user.id,
     )
     background_tasks.add_task(
@@ -314,7 +299,6 @@ async def upload_document(
         doc["_id"],
         buffer,
         doc["mimeType"],
-        doc["documentType"],
         doc["processingRunId"],
     )
     return {"document": _serialize_document(doc)}
@@ -326,7 +310,6 @@ async def bulk_upload_documents(
     request: Request,
     background_tasks: BackgroundTasks,
     documents: list[UploadFile] = File(...),
-    document_types: list[str] = Form(..., alias="documentTypes"),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> dict:
     if not documents:
@@ -335,12 +318,10 @@ async def bulk_upload_documents(
         raise HTTPException(
             status_code=400, detail=f"You can upload a maximum of {MAX_BULK_FILES} files at once."
         )
-    if len(document_types) != len(documents):
-        raise HTTPException(status_code=400, detail="Each file needs a document type.")
 
     results: list[dict[str, object]] = []
-    created: list[tuple[ObjectId, bytes, str, str, str]] = []
-    for upload_file, doc_type in zip(documents, document_types, strict=True):
+    created: list[tuple[ObjectId, bytes, str, str]] = []
+    for upload_file in documents:
         buffer = await read_limited(upload_file)
         if buffer is None:
             results.append(
@@ -352,15 +333,12 @@ async def bulk_upload_documents(
                 buffer,
                 upload_file.content_type or "",
                 upload_file.filename or "upload",
-                doc_type,
                 current_user.id,
             )
         except HTTPException as exc:
             results.append({"originalFilename": upload_file.filename, "error": exc.detail})
             continue
-        created.append(
-            (doc["_id"], buffer, doc["mimeType"], doc["documentType"], doc["processingRunId"])
-        )
+        created.append((doc["_id"], buffer, doc["mimeType"], doc["processingRunId"]))
         results.append({"document": _serialize_document(doc)})
 
     # Strictly sequential - one file's full OCR->AI->save pipeline completes
@@ -373,9 +351,9 @@ async def bulk_upload_documents(
     # at whichever file triggered it, silently leaving every later file in
     # the batch stuck at "uploaded" forever.
     async def _run_sequentially() -> None:
-        for doc_id, buffer, mime_type, doc_type, run_id in created:
+        for doc_id, buffer, mime_type, run_id in created:
             try:
-                await process_document(doc_id, buffer, mime_type, doc_type, run_id)
+                await process_document(doc_id, buffer, mime_type, run_id)
             except Exception as exc:  # noqa: BLE001
                 logger.error(
                     f"Bulk-upload file {doc_id} crashed the pipeline: class={type(exc).__name__}"
@@ -401,12 +379,17 @@ async def bulk_upload_documents(
 
 
 def _serialize_document(doc: dict) -> dict:
-    # *Confidence keys: legacy rows may still carry the removed AI-confidence fields.
-    out = {k: v for k, v in doc.items() if k != "ocrTextHidden" and not k.endswith("Confidence")}
+    out = {k: v for k, v in doc.items() if k != "ocrTextHidden"}
     out["_id"] = str(out["_id"])
     out["userId"] = str(out["userId"])
     if out.get("gridFsFileId"):
         out["gridFsFileId"] = str(out["gridFsFileId"])
+    field_warnings = compute_warnings(doc)
+    if doc.get("isDuplicate"):
+        field_warnings.append(
+            {"field": "receiptNumber", "message": "Possible duplicate: same operator, receipt number and date already exist"}
+        )
+    out["warnings"] = field_warnings
     return out
 
 
@@ -446,21 +429,7 @@ def _str_or_empty(field: str) -> dict:
 def _sort_key_expr(sort: str) -> dict | str:
     """Mongo expression for the sort key (see list_documents for the semantics)."""
     if sort == "number":
-        a, b = _str_or_empty("$taxInvoiceNo"), _str_or_empty("$referenceNo")
-        tax_number = {
-            "$cond": [
-                {"$and": [{"$ne": [a, ""]}, {"$ne": [b, ""]}]},
-                {"$concat": [a, " / ", b]},
-                {"$concat": [a, b]},
-            ]
-        }
-        return {
-            "$cond": [
-                {"$eq": ["$documentType", "Tax Invoice"]},
-                tax_number,
-                _str_or_empty("$number"),
-            ]
-        }
+        return _str_or_empty("$receiptNumber")
     if sort == "date":  # DD/MM/YYYY -> YYYYMMDD, anything else -> ""
         return {
             "$cond": [
@@ -482,7 +451,7 @@ def _sort_key_expr(sort: str) -> dict | str:
         }
     if sort == "edited":
         return {"$eq": ["$edited", True]}
-    if sort in ("documentType", "uploadStatus"):
+    if sort == "uploadStatus":
         return _str_or_empty(f"${sort}")
     return "$createdAt"
 
@@ -502,8 +471,8 @@ def _sorted_page_pipeline(
 
 @router.get("")
 async def list_documents(
-    document_type: str | None = Query(default=None, alias="documentType"),
     number: str | None = Query(default=None),
+    needs_review: bool | None = Query(default=None, alias="needsReview"),
     date: str | None = Query(default=None),
     range: Literal["today", "week", "month", "year"] | None = Query(default=None),
     month: str | None = Query(default=None),
@@ -511,7 +480,7 @@ async def list_documents(
     page: int | None = Query(default=None),
     limit: int | None = Query(default=None),
     sort: (
-        Literal["documentType", "number", "date", "uploadStatus", "edited", "createdAt"] | None
+        Literal["number", "date", "uploadStatus", "edited", "createdAt"] | None
     ) = Query(default=None),
     order: Literal["asc", "desc"] | None = Query(default=None),
     current_user: CurrentUser = Depends(get_current_user),
@@ -528,22 +497,22 @@ async def list_documents(
     db = get_database()
     filter_query: dict = {"userId": current_user.id, "isDeleted": {"$ne": True}}
 
-    if document_type in DOCUMENT_TYPES:
-        filter_query["documentType"] = document_type
     if number and "\x00" in number:
         raise HTTPException(status_code=400, detail="Invalid search text.")
     if number and number.strip():
         regex = {"$regex": _escape_regex(number.strip()), "$options": "i"}
         filter_query["$or"] = [
-            {"taxInvoiceNo": regex},
-            {"referenceNo": regex},
-            {"number": regex},
+            {f: regex} for f in ("receiptNumber", "operatorName", "consignorName", "consigneeName")
+        ]
+    if needs_review:
+        filter_query["$and"] = [
+            {"$or": [{f: True} for f in EXTRACTION_FLAG_FIELDS if f.endswith("NeedsReview")]}
         ]
     if date and date.strip():
         filter_query["date"] = date.strip()
     if month:
         # By the document's OWN date (DD/MM/YYYY string), not upload time. Combined via $and so
-        # it can never overwrite the number search's $or.
+        # it can never overwrite the search's $or.
         if month == "none":
             date_cond: dict = {"date": {"$not": re.compile(r"^\d{2}/\d{2}/\d{4}$")}}
         else:
@@ -551,7 +520,7 @@ async def list_documents(
             if not m:
                 raise HTTPException(status_code=400, detail="Invalid month.")
             date_cond = {"date": re.compile(rf"^\d{{2}}/{m.group(2)}/{m.group(1)}$")}
-        filter_query["$and"] = [date_cond]
+        filter_query.setdefault("$and", []).append(date_cond)
     # Lower bounds on upload time (createdAt). Both filters may be present: the later one wins.
     lower_bounds: list[datetime] = []
     if range in RANGE_DAYS:
@@ -588,11 +557,7 @@ async def list_documents(
 
     cursor = db.documents.find(filter_query).sort("createdAt", -1)
     documents = [_serialize_document(d) async for d in cursor]
-    by_document_type = {"Tax Invoice": 0, "Delivery Challan": 0}
-    for d in documents:
-        if d["documentType"] in by_document_type:
-            by_document_type[d["documentType"]] += 1
-    return {"documents": documents, "byDocumentType": by_document_type}
+    return {"documents": documents}
 
 
 @router.get("/summary")
@@ -623,14 +588,6 @@ async def documents_summary(current_user: CurrentUser = Depends(get_current_user
                 "processed": count(processed),
                 "failed": count({"$eq": ["$uploadStatus", "failed"]}),
                 "today": count(today),
-                "todayTaxInvoice": count(
-                    {"$and": [today, {"$eq": ["$documentType", "Tax Invoice"]}]}
-                ),
-                "todayChallan": count(
-                    {"$and": [today, {"$eq": ["$documentType", "Delivery Challan"]}]}
-                ),
-                "taxInvoice": count({"$eq": ["$documentType", "Tax Invoice"]}),
-                "challan": count({"$eq": ["$documentType", "Delivery Challan"]}),
                 "recent": [{"$sort": {"createdAt": -1, "_id": -1}}, {"$limit": 3}],
             }
         },
@@ -646,11 +603,6 @@ async def documents_summary(current_user: CurrentUser = Depends(get_current_user
         "processed": n("processed"),
         "failed": n("failed"),
         "processedToday": n("today"),
-        "processedTodayByType": {
-            "Tax Invoice": n("todayTaxInvoice"),
-            "Delivery Challan": n("todayChallan"),
-        },
-        "byDocumentType": {"Tax Invoice": n("taxInvoice"), "Delivery Challan": n("challan")},
         "recent": [_serialize_document(d) for d in facet.get("recent", [])],
     }
 
@@ -691,8 +643,7 @@ def _serialize_activity(log: dict, doc_lookup: dict) -> dict:
         "document": (
             {
                 "id": str(doc["_id"]),
-                "documentType": doc.get("documentType"),
-                "number": doc.get("taxInvoiceNo") or doc.get("number"),
+                "receiptNumber": doc.get("receiptNumber"),
                 "date": doc.get("date"),
             }
             if doc
@@ -747,7 +698,7 @@ async def my_activity(
             # audit entries, but a lookup by bare _id must never be able to surface
             # another user's document fields.
             {"_id": {"$in": doc_ids}, "userId": current_user.id},
-            {"documentType": 1, "taxInvoiceNo": 1, "number": 1, "date": 1},
+            {"receiptNumber": 1, "date": 1},
         ):
             doc_lookup[str(d["_id"])] = d
 
@@ -953,11 +904,9 @@ async def reprocess_document(
                 "processingErrorCode": None,
                 "recoveryAttempts": 0,
                 "edited": False,
-                "exported": False,
                 "processingRunId": run_id,
                 "updatedAt": now,
             },
-            "$unset": reset["$unset"],
         },
         # BEFORE: if the original file cannot be read afterwards, the document goes back exactly
         # as it was (its values, flags and manual corrections must never be lost to a failed read).
@@ -985,13 +934,11 @@ async def reprocess_document(
         logger.error(f"Reprocess could not read the original file: class={type(exc).__name__}")
         touched = [
             *reset["$set"],
-            *reset["$unset"],
             "uploadStatus",
             "processingError",
             "processingErrorCode",
             "recoveryAttempts",
             "edited",
-            "exported",
             "processingRunId",
             "updatedAt",
         ]
@@ -1006,7 +953,7 @@ async def reprocess_document(
         ) from None
 
     async def _reprocess_then_stamp() -> None:
-        await process_document(doc["_id"], buffer, doc["mimeType"], doc["documentType"], run_id)
+        await process_document(doc["_id"], buffer, doc["mimeType"], run_id)
         await db.documents.update_one(
             {"_id": doc["_id"], "processingRunId": run_id},
             {"$set": {"reprocessedAt": datetime.now(UTC)}},
@@ -1018,7 +965,6 @@ async def reprocess_document(
         {
             "documentId": str(doc["_id"]),
             "filename": doc.get("originalFilename"),
-            "documentType": doc.get("documentType"),
         },
     )
     background_tasks.add_task(_reprocess_then_stamp)
@@ -1153,11 +1099,14 @@ async def correct_document(
             "documentId": str(doc["_id"]),
             "field": body.field,
             "filename": doc.get("originalFilename"),
-            "documentType": doc.get("documentType"),
         },
     )
     updated = await db.documents.find_one({"_id": doc["_id"]})
     assert updated is not None
+    if body.field in ("operatorName", "receiptNumber", "date"):
+        await refresh_duplicate_flag(db, current_user.id, doc["_id"], updated)
+        updated = await db.documents.find_one({"_id": doc["_id"]})
+        assert updated is not None
     return {"message": "Field corrected successfully.", "document": _serialize_document(updated)}
 
 
@@ -1215,7 +1164,6 @@ async def recover_interrupted_uploads() -> int:
                 doc["_id"],
                 buffer,
                 doc["mimeType"],
-                doc["documentType"],
                 claimed["processingRunId"],
             )
         except Exception:  # noqa: BLE001

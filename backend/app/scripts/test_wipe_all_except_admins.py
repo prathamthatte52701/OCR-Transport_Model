@@ -13,7 +13,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import openpyxl
 import pytest
 import pytest_asyncio
 from bson import ObjectId
@@ -22,7 +21,6 @@ from PIL import Image
 
 from app.core.config import settings
 from app.core.database import _ensure_indexes
-from app.features.excel import service as excel_service
 from app.features.ocr import extraction as ex
 from app.features.ocr import paddle_runner, pipeline
 from app.scripts import wipe_all_except_admins as wipe
@@ -35,8 +33,6 @@ NON_ADMIN_DOMAIN = "nonadmin-secret.example"
 ROW_COLLECTIONS = [
     "documents",
     "corrections",
-    "exportedrows",
-    "workbooks",
     "auditlogs",
     "orphanedfiles",
     "settings",
@@ -46,8 +42,6 @@ COUNTS = {
     "chatmessages": 9,
     "documents": 3,
     "corrections": 4,
-    "exportedrows": 5,
-    "workbooks": 2,
     "auditlogs": 6,
     "orphanedfiles": 7,
     "settings": 8,
@@ -60,23 +54,23 @@ def _guard(name: str) -> str:
     return name
 
 
-async def _run(name: str, *flags: str, exports: Path | None = None) -> int:
-    return await wipe.run(["--db", _guard(name), *flags], exports_dir=exports)
+async def _run(name: str, *flags: str) -> int:
+    return await wipe.run(["--db", _guard(name), *flags])
 
 
 # ---------- seeding / snapshots ----------
 
 
-async def _seed(db: Any, make_user: Any, tmp_path: Path) -> dict[str, Any]:
+async def _seed(db: Any, make_user: Any) -> dict[str, Any]:
     _guard(db.name)
     await _ensure_indexes(db)
     a1 = await make_user(role="admin", email="boss1@looptest.local")
-    a2 = await make_user(role="admin", status="pending", email="boss2@looptest.local")
+    a2 = await make_user(role="admin", email="boss2@looptest.local")
     await db.users.update_one({"_id": a1.id}, {"$set": {"tokenVersion": 7}})
     users = [
-        await make_user(status="approved", email=f"ok@{NON_ADMIN_DOMAIN}"),
-        await make_user(status="pending", email=f"wait@{NON_ADMIN_DOMAIN}"),
-        await make_user(status="rejected", email=f"no@{NON_ADMIN_DOMAIN}"),
+        await make_user(email=f"ok@{NON_ADMIN_DOMAIN}"),
+        await make_user(email=f"wait@{NON_ADMIN_DOMAIN}"),
+        await make_user(email=f"no@{NON_ADMIN_DOMAIN}"),
     ]
     await db.users.insert_one(  # legacy user with no role/status at all
         {"username": "legacy", "email": f"old@{NON_ADMIN_DOMAIN}", "tokenVersion": 0}
@@ -95,16 +89,7 @@ async def _seed(db: Any, make_user: Any, tmp_path: Path) -> dict[str, Any]:
     bucket = AsyncIOMotorGridFSBucket(db)
     for i in range(3):
         await bucket.upload_from_stream(f"f{i}.png", FILE_MARK * (i + 1))
-    exports = tmp_path / "exports"
-    exports.mkdir()
-    for fname in ("1_Book.xlsx", "1_Book.xlsx.lock", "1_Book.tmp123.xlsx", "2_Other.xlsx"):
-        (exports / fname).write_bytes(FILE_MARK)
-    (exports / "notes.txt").write_text("keep me")
-    (exports / ".gitkeep").write_text("")
-    (exports / "~$1_Book.xlsx").write_bytes(b"owner")
-    (exports / "sub").mkdir()
-    (exports / "sub" / "inner.xlsx").write_bytes(b"inner")
-    return {"admins": [a1, a2], "users": users, "exports": exports}
+    return {"admins": [a1, a2], "users": users}
 
 
 async def _snapshot(db: Any) -> dict[str, list[dict[str, Any]]]:
@@ -112,12 +97,6 @@ async def _snapshot(db: Any) -> dict[str, list[dict[str, Any]]]:
     for name in sorted(await db.list_collection_names()):
         out[name] = await db[name].find({}).sort("_id", 1).to_list(None)
     return out
-
-
-def _tree(path: Path) -> list[tuple[str, bytes | None]]:
-    return sorted(
-        (str(p.relative_to(path)), p.read_bytes() if p.is_file() else None) for p in path.rglob("*")
-    )
 
 
 async def _indexes(db: Any) -> dict[str, set[str]]:
@@ -132,14 +111,13 @@ def _line(out: str, name: str) -> str:
 
 
 async def test_dry_run_changes_nothing_and_prints_counts(
-    db: Any, make_user: Any, tmp_path: Path, capsys: Any
+    db: Any, make_user: Any, capsys: Any
 ) -> None:
-    s = await _seed(db, make_user, tmp_path)
-    before, tree = await _snapshot(db), _tree(s["exports"])
+    s = await _seed(db, make_user)
+    before = await _snapshot(db)
     capsys.readouterr()
-    assert await _run(db.name, exports=s["exports"]) == 0
+    assert await _run(db.name) == 0
     assert await _snapshot(db) == before
-    assert _tree(s["exports"]) == tree
     out = capsys.readouterr().out
     for name, n in {**COUNTS, "users": 4}.items():
         assert re.search(rf"(?<!\d){n}(?!\d)", _line(out, name)), (name, _line(out, name))
@@ -150,19 +128,15 @@ async def test_dry_run_changes_nothing_and_prints_counts(
 # ---------- 2. apply ----------
 
 
-async def test_apply_keeps_admins_wipes_rest(db: Any, make_user: Any, tmp_path: Path) -> None:
-    s = await _seed(db, make_user, tmp_path)
+async def test_apply_keeps_admins_wipes_rest(db: Any, make_user: Any) -> None:
+    s = await _seed(db, make_user)
     admins_before = await db.users.find({"role": "admin"}).sort("_id", 1).to_list(None)
     idx_before = await _indexes(db)
-    exports = s["exports"]
-    assert await _run(db.name, "--apply", "--i-have-a-backup", exports=exports) == 0
+    assert await _run(db.name, "--apply", "--i-have-a-backup") == 0
     assert await db.users.find({"role": "admin"}).sort("_id", 1).to_list(None) == admins_before
     assert await db.users.count_documents({}) == 2
     for name in ROW_COLLECTIONS + ["fs.files", "fs.chunks"]:
         assert await db[name].count_documents({}) == 0, name
-    assert {p.name for p in exports.iterdir()} == {"notes.txt", ".gitkeep", "~$1_Book.xlsx", "sub"}
-    assert (exports / "sub" / "inner.xlsx").read_bytes() == b"inner"
-    assert (exports / "notes.txt").read_text() == "keep me"
     assert await _indexes(db) == idx_before
     assert "email_1" in idx_before["users"]
     dup = {"username": "dup", "email": s["admins"][0].email, "role": "user"}
@@ -173,88 +147,53 @@ async def test_apply_keeps_admins_wipes_rest(db: Any, make_user: Any, tmp_path: 
 # ---------- 3. refusals ----------
 
 
-async def _assert_refused(db: Any, exports: Path, code: int, name: str, *flags: str) -> None:
-    before, tree = await _snapshot(db), _tree(exports)
-    assert await _run(name, *flags, exports=exports) == code
+async def _assert_refused(db: Any, code: int, name: str, *flags: str) -> None:
+    before = await _snapshot(db)
+    assert await _run(name, *flags) == code
     assert await _snapshot(db) == before
-    assert _tree(exports) == tree
 
 
-async def test_apply_without_backup_flag_refused(db: Any, make_user: Any, tmp_path: Path) -> None:
-    s = await _seed(db, make_user, tmp_path)
-    await _assert_refused(db, s["exports"], 4, db.name, "--apply")
+async def test_apply_without_backup_flag_refused(db: Any, make_user: Any) -> None:
+    await _seed(db, make_user)
+    await _assert_refused(db, 4, db.name, "--apply")
 
 
-async def test_wrong_db_refused(db: Any, make_user: Any, tmp_path: Path) -> None:
-    s = await _seed(db, make_user, tmp_path)
-    await _assert_refused(
-        db, s["exports"], 2, "ackn_some_other_test", "--apply", "--i-have-a-backup"
-    )
+async def test_wrong_db_refused(db: Any, make_user: Any) -> None:
+    await _seed(db, make_user)
+    await _assert_refused(db, 2, "ackn_some_other_test", "--apply", "--i-have-a-backup")
 
 
 @pytest.mark.parametrize("variant", ["none", "role_user", "no_role_field"])
-async def test_no_admin_refused(db: Any, make_user: Any, tmp_path: Path, variant: str) -> None:
-    s = await _seed(db, make_user, tmp_path)
+async def test_no_admin_refused(db: Any, make_user: Any, variant: str) -> None:
+    await _seed(db, make_user)
     await db.users.delete_many({"role": "admin"})
     if variant == "role_user":
         await db.users.insert_one({"username": "fake", "email": "f@x.example", "role": "user"})
     elif variant == "no_role_field":
         await db.users.insert_one({"username": "fake", "email": "f@x.example"})
-    await _assert_refused(db, s["exports"], 3, db.name, "--apply", "--i-have-a-backup")
-    await _assert_refused(db, s["exports"], 3, db.name)  # dry run refuses too
+    await _assert_refused(db, 3, db.name, "--apply", "--i-have-a-backup")
+    await _assert_refused(db, 3, db.name)  # dry run refuses too
 
 
-# ---------- 4. idempotent / orphan chunks / missing dir / locked file ----------
+# ---------- 4. idempotent / orphan chunks ----------
 
 
 async def test_second_run_deletes_nothing_and_orphan_chunks_cleaned(
-    db: Any, make_user: Any, tmp_path: Path, capsys: Any
+    db: Any, make_user: Any, capsys: Any
 ) -> None:
-    s = await _seed(db, make_user, tmp_path)
+    await _seed(db, make_user)
     flags = ("--apply", "--i-have-a-backup")
-    assert await _run(db.name, *flags, exports=s["exports"]) == 0
+    assert await _run(db.name, *flags) == 0
     await db["fs.chunks"].insert_one({"files_id": ObjectId(), "n": 0, "data": b"orphan"})
-    assert await _run(db.name, *flags, exports=s["exports"]) == 0
+    assert await _run(db.name, *flags) == 0
     assert await db["fs.chunks"].count_documents({}) == 0
     assert await db.users.count_documents({}) == 2
     capsys.readouterr()
-    assert await _run(db.name, *flags, exports=s["exports"]) == 0
-    assert await _run(db.name, exports=s["exports"]) == 0
+    assert await _run(db.name, *flags) == 0
+    assert await _run(db.name) == 0
     out = capsys.readouterr().out
     for name in ROW_COLLECTIONS:
         assert not re.search(r"[1-9]", _line(out, name).replace(name, "")), _line(out, name)
-
-
-async def test_missing_exports_dir_ok(db: Any, make_user: Any, tmp_path: Path) -> None:
-    await _seed(db, make_user, tmp_path)
-    gone = tmp_path / "does-not-exist"
-    assert await _run(db.name, exports=gone) == 0
-    assert await _run(db.name, "--apply", "--i-have-a-backup", exports=gone) == 0
-    assert not gone.exists()
-
-
-async def test_folder_named_like_workbook_is_left_alone_and_run_passes(
-    db: Any, make_user: Any, tmp_path: Path
-) -> None:
-    s = await _seed(db, make_user, tmp_path)
-    (s["exports"] / "dir.xlsx").mkdir()
-    (s["exports"] / "dir.xlsx" / "inner.txt").write_text("keep")
-    assert await _run(db.name, "--apply", "--i-have-a-backup", exports=s["exports"]) == 0
-    assert (s["exports"] / "dir.xlsx" / "inner.txt").read_text() == "keep"
-    assert await _run(db.name, "--apply", "--i-have-a-backup", exports=s["exports"]) == 0
-
-
-@pytest.mark.skipif(os.name != "nt", reason="open handle blocks delete on Windows only")
-async def test_locked_file_exit_1_lists_name(
-    db: Any, make_user: Any, tmp_path: Path, capsys: Any
-) -> None:
-    s = await _seed(db, make_user, tmp_path)
-    capsys.readouterr()
-    with open(s["exports"] / "2_Other.xlsx", "rb"):  # Windows forbids deleting an open file
-        code = await _run(db.name, "--apply", "--i-have-a-backup", exports=s["exports"])
-    assert code == 1
-    assert "2_Other.xlsx" in capsys.readouterr().out
-    assert await db.users.count_documents({}) == 2
 
 
 # ---------- 5. DB-name safety ----------
@@ -272,14 +211,14 @@ def test_no_non_test_db_name_in_this_file() -> None:
 # ---------- 6. nothing sensitive in output ----------
 
 
-async def test_output_has_no_secrets(db: Any, make_user: Any, tmp_path: Path, capsys: Any) -> None:
-    s = await _seed(db, make_user, tmp_path)
+async def test_output_has_no_secrets(db: Any, make_user: Any, capsys: Any) -> None:
+    s = await _seed(db, make_user)
     hashes = [u["passwordHash"] async for u in db.users.find({"passwordHash": {"$exists": True}})]
     tokens = [a._token for a in s["admins"] + s["users"]]
     capsys.readouterr()
-    await _run(db.name, exports=s["exports"])
-    await _run(db.name, "--apply", exports=s["exports"])  # refusal path
-    await _run(db.name, "--apply", "--i-have-a-backup", exports=s["exports"])
+    await _run(db.name)
+    await _run(db.name, "--apply")  # refusal path
+    await _run(db.name, "--apply", "--i-have-a-backup")
     cap = capsys.readouterr()
     out = cap.out + cap.err
     assert hashes and PW_HASH_MARK not in out
@@ -317,7 +256,7 @@ def _cli(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-async def test_cli_subprocess(sub_db: Any, tmp_path: Path) -> None:
+async def test_cli_subprocess(sub_db: Any) -> None:
     await sub_db.users.insert_many(
         [
             {"username": "adm", "email": "adm@looptest.local", "role": "admin"},
@@ -325,21 +264,16 @@ async def test_cli_subprocess(sub_db: Any, tmp_path: Path) -> None:
         ]
     )
     await sub_db.documents.insert_one({"n": 1})
-    exports = tmp_path / "exp"
-    exports.mkdir()
-    (exports / "1_B.xlsx").write_bytes(b"x")
-    ex_args = ["--exports-dir", str(exports)]
 
     assert _cli("--db", "ackn_other_test").returncode == 2
     assert _cli("--db", SUB_DB, "--apply").returncode == 4
-    dry = _cli("--db", SUB_DB, *ex_args)
+    dry = _cli("--db", SUB_DB)
     assert dry.returncode == 0 and NON_ADMIN_DOMAIN not in dry.stdout + dry.stderr
-    assert await sub_db.documents.count_documents({}) == 1 and (exports / "1_B.xlsx").exists()
-    done = _cli("--db", SUB_DB, "--apply", "--i-have-a-backup", *ex_args)
+    assert await sub_db.documents.count_documents({}) == 1
+    done = _cli("--db", SUB_DB, "--apply", "--i-have-a-backup")
     assert done.returncode == 0, done.stdout + done.stderr
     assert await sub_db.documents.count_documents({}) == 0
     assert [u["username"] async for u in sub_db.users.find({})] == ["adm"]
-    assert not (exports / "1_B.xlsx").exists()
 
 
 # ---------- 7. app works after the wipe ----------
@@ -349,16 +283,11 @@ async def test_app_flow_after_wipe(
     db: Any,
     client: Any,
     make_user: Any,
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    s = await _seed(db, make_user, tmp_path)
-    assert await _run(db.name, "--apply", "--i-have-a-backup", exports=s["exports"]) == 0
-    exports = tmp_path / "live"
-    exports.mkdir()
-    monkeypatch.setattr(excel_service, "EXPORT_DIR", exports)
+    s = await _seed(db, make_user)
+    assert await _run(db.name, "--apply", "--i-have-a-backup") == 0
 
-    year = excel_service.current_period()[0]
     pipeline._reset_slot_for_tests()
     paddle_runner._reset_engine_for_tests()
     monkeypatch.setattr(pipeline, "run_ocr", lambda _p, **_k: "OCR TEXT")
@@ -367,7 +296,7 @@ async def test_app_flow_after_wipe(
     async def ai(document_type: str, _text: str) -> dict[str, Any]:
         return dict(
             ex.build_extraction_result(
-                document_type, {"number": "820000123", "date": f"05/10/{year}"}
+                document_type, {"number": "820000123", "date": "05/10/2026"}
             )
         )
 
@@ -378,17 +307,11 @@ async def test_app_flow_after_wipe(
         "/api/auth/login", json={"email": admin.email, "password": admin.password}
     )
     assert login.status_code == 200
-    admin_h = {"Authorization": f"Bearer {login.json()['token']}"}
 
     creds = {"username": "freshie", "email": "fresh@looptest.local", "password": "Xq7!mZv#4Lp2"}
     sg = await client.post("/api/auth/signup", json=creds)
     assert sg.status_code == 201, sg.text
     login_body = {"email": creds["email"], "password": creds["password"]}
-    assert (await client.post("/api/auth/login", json=login_body)).status_code == 403
-    new = await db.users.find_one({"email": creds["email"]})
-    assert new is not None and new["status"] == "pending"
-    appr = await client.post(f"/api/admin/users/{new['_id']}/approve", headers=admin_h)
-    assert appr.status_code == 200, appr.text
     tok = await client.post("/api/auth/login", json=login_body)
     assert tok.status_code == 200
     h = {"Authorization": f"Bearer {tok.json()['token']}"}
@@ -411,14 +334,5 @@ async def test_app_flow_after_wipe(
         await asyncio.sleep(0.05)
     else:
         raise AssertionError(f"document never processed: {doc}")
-
-    r = await client.post("/api/documents/new-excel-file", headers=h, json={"filename": "Book"})
-    assert r.status_code == 200, r.text
-    r = await client.post(f"/api/documents/{doc_id}/save", headers=h)
-    assert r.status_code == 200, r.text
-    files = list(exports.glob("*.xlsx"))
-    assert len(files) == 1
-    book = openpyxl.load_workbook(files[0])
-    cells = [str(c) for ws in book for row in ws.iter_rows(values_only=True) for c in row]
-    assert any("820000123" in c for c in cells)
+    assert doc["number"] == "820000123"
     pipeline._reset_slot_for_tests()

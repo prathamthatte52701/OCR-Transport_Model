@@ -8,14 +8,22 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.features.documents.correction import correction_set_fields
-from app.features.ocr.extraction import normalize_date_to_ddmmyyyy
+from app.features.ocr.extraction import (
+    AMOUNT_RE,
+    EXTRACTION_VALUE_FIELDS,
+    GSTIN_RE,
+    PHONE_RE,
+    normalize_date_to_ddmmyyyy,
+)
 
-CORRECTABLE_NUMBER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ./_-]{0,39}$")
-EDITABLE_FIELDS = {"taxInvoiceNo", "referenceNo", "number", "date"}
-FIELDS_BY_DOCUMENT_TYPE = {
-    "Tax Invoice": {"taxInvoiceNo", "referenceNo", "date"},
-    "Delivery Challan": {"number", "date"},
-}
+EDITABLE_FIELDS = set(EXTRACTION_VALUE_FIELDS)
+_AMOUNT_FIELDS = {"packageCount", "freight", "deliveryCharge", "demurrage", "sgst", "cgst", "igst", "totalAmount"}
+_GSTIN_FIELDS = {"operatorGstin", "consignorGstin", "consigneeGstin"}
+_PHONE_FIELDS = {"consignorPhone", "consigneePhone"}
+# Plain text (names, places, addresses, descriptions, remarks): blocks control characters,
+# HTML/script tags and "=HYPERLINK(...)"-style formula injection; everything else - including
+# punctuation in an address or a name with an apostrophe - is allowed. Max 300 chars.
+SAFE_TEXT_RE = re.compile(r"^[^\x00-\x08\x0b\x0c\x0e-\x1f<>]{1,300}$")
 CHANGED_MSG = "This document changed while you were editing. Please reload and try again."
 
 
@@ -39,12 +47,8 @@ def validate_correction(doc: dict, field: str, raw_value: str) -> str:
                 "Please wait for it to finish before editing."
             ),
         )
-    if field not in FIELDS_BY_DOCUMENT_TYPE[doc["documentType"]]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"That field cannot be edited on a {doc['documentType']} document.",
-        )
     value = raw_value.strip()
+
     if field == "date":
         normalized = normalize_date_to_ddmmyyyy(value)
         if not normalized:
@@ -52,15 +56,33 @@ def validate_correction(doc: dict, field: str, raw_value: str) -> str:
                 status_code=400, detail="Enter a real date in DD/MM/YYYY format (year 2000-2100)."
             )
         return normalized
-    if not CORRECTABLE_NUMBER_RE.match(value):
-        # Letters/digits (plus - / . _ and spaces), 1-40 chars: blocks huge strings, <script>,
-        # control characters (500 on Excel save) and "=HYPERLINK(...)" formulas.
+
+    if field in _AMOUNT_FIELDS:
+        cleaned = value.replace(",", "")
+        if not AMOUNT_RE.match(cleaned):
+            raise HTTPException(
+                status_code=400, detail="Enter a plain number (digits only, max 2 decimal places)."
+            )
+        return cleaned
+
+    if field in _GSTIN_FIELDS:
+        cleaned = value.upper().replace(" ", "")
+        if GSTIN_RE.match(cleaned) is None:
+            raise HTTPException(
+                status_code=400, detail="Enter a 15-character GSTIN in the standard format."
+            )
+        return cleaned
+
+    if field in _PHONE_FIELDS:
+        digits = re.sub(r"[^\d]", "", value)
+        if PHONE_RE.match(digits) is None:
+            raise HTTPException(status_code=400, detail="Enter a 10-digit phone number.")
+        return digits
+
+    if not SAFE_TEXT_RE.match(value):
         raise HTTPException(
             status_code=400,
-            detail=(
-                "Number can only contain letters, digits, spaces and - / . _ "
-                "(max 40 characters)."
-            ),
+            detail="Enter plain text without control characters or HTML tags (max 300 characters).",
         )
     return value
 

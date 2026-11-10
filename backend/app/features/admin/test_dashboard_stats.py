@@ -29,11 +29,10 @@ async def test_empty_database_returns_zeros_and_empty_lists(client: Any, make_us
     r = await _get(client, admin)
     assert r.status_code == 200
     body = r.json()
-    assert body["totalDocuments"] == 0 and body["totalExports"] == 0
+    assert body["totalDocuments"] == 0
     assert body["documentsByStatus"] == {"uploaded": 0, "processed": 0, "failed": 0}
     assert body["ocrFailureRate"] == 0 and body["failedDocuments"] == 0
     assert body["orphanedFiles"] == 0
-    assert body["pendingUsers"] == {"count": 0, "oldest": []}
     assert body["trends"]["documents"] == {"current": 0, "previous": 0}
     assert isinstance(body["activityFeed"], list)
 
@@ -49,38 +48,17 @@ async def test_counts_failed_orphaned_and_deleted_documents(
 ) -> None:
     admin, u = await make_user(role="admin"), await make_user()
     await db.documents.insert_many(
-        [_doc(u), _doc(u), _doc(u, "failed", "Delivery Challan"), _doc(u, "uploaded")]
+        [_doc(u), _doc(u), _doc(u, "failed"), _doc(u, "uploaded")]
         + [_doc(u, "failed", isDeleted=True)]  # soft-deleted: never counted
     )
     await db.orphanedfiles.insert_many(
         [{"userId": u.id, "gridFsFileId": ObjectId()}, {"userId": u.id, "gridFsFileId": ObjectId()}]
     )
-    await db.exportedrows.insert_one({"userId": u.id, "exportedAt": datetime.now(UTC)})
     body = (await _get(client, admin)).json()
     assert body["totalDocuments"] == 4
     assert body["documentsByStatus"] == {"uploaded": 1, "processed": 2, "failed": 1}
-    assert body["documentsByType"] == {"Tax Invoice": 3, "Delivery Challan": 1}
     assert body["failedDocuments"] == 1 and body["orphanedFiles"] == 2
-    assert body["totalExports"] == 1
     assert body["ocrFailureRate"] == 33.3  # 1 failed of 3 finished
-
-
-async def test_pending_list_has_only_pending_users_oldest_first_max_five(
-    client: Any, make_user: Any, db: Any
-) -> None:
-    admin = await make_user(role="admin")
-    await make_user(status="approved")
-    await make_user(status="rejected")
-    pending = [await make_user(status="pending") for _ in range(7)]
-    now = datetime.now(UTC)
-    for i, p in enumerate(pending):  # pending[0] is the OLDEST
-        await db.users.update_one(
-            {"_id": p.id}, {"$set": {"createdAt": now - timedelta(days=10 - i)}}
-        )
-    body = (await _get(client, admin)).json()["pendingUsers"]
-    assert body["count"] == 7 and len(body["oldest"]) == 5
-    assert [x["id"] for x in body["oldest"]] == [str(p.id) for p in pending[:5]]
-    assert all(set(x) == {"id", "username", "email", "createdAt"} for x in body["oldest"])
 
 
 async def test_feed_has_at_most_ten_items_with_correct_usernames_and_groups(
@@ -191,7 +169,7 @@ async def test_dashboard_is_fast_with_5000_documents_and_500_users(
                 "username": f"p{i}",
                 "email": f"p{i}@looptest.local",
                 "role": "user",
-                "status": "pending" if i % 5 == 0 else "approved",
+                "status": "approved",
                 "tokenVersion": 0,
                 "createdAt": now - timedelta(minutes=i),
             }
@@ -223,7 +201,6 @@ async def test_dashboard_is_fast_with_5000_documents_and_500_users(
     r = await _get(client, admin)
     elapsed = time.perf_counter() - t0
     assert r.status_code == 200 and r.json()["totalDocuments"] == 5000
-    assert r.json()["pendingUsers"]["count"] == 100
     print(f"\ndashboard with 5000 docs / 500 users: {elapsed * 1000:.0f} ms")
     assert elapsed < 5.0
 

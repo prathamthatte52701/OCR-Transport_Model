@@ -1,7 +1,6 @@
 """Chat cascades: delete_user removes only that user's chat thread; the wipe script clears it."""
 
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 
 from app.scripts import wipe_all_except_admins as wipe
@@ -49,18 +48,17 @@ async def test_delete_user_without_messages(client: Any, db: Any, make_user: Any
 
 
 async def test_wipe_dry_run_counts_and_apply_clears_chat(
-    db: Any, make_user: Any, tmp_path: Path, capsys: Any
+    db: Any, make_user: Any, capsys: Any
 ) -> None:
     assert db.name.endswith("_test")
     admin, u = await make_user(role="admin"), await make_user()
     await db.chatmessages.insert_many([_msg(u.id, u.id, "user"), _msg(u.id, admin.id, "admin")])
-    exports = tmp_path / "exp"
     capsys.readouterr()
-    assert await wipe.run(["--db", db.name], exports_dir=exports) == 0
+    assert await wipe.run(["--db", db.name]) == 0
     line = next(x for x in capsys.readouterr().out.splitlines() if "chatmessages" in x)
     assert "2" in line.split()
     assert await db.chatmessages.count_documents({}) == 2
     args = ["--db", db.name, "--apply", "--i-have-a-backup"]
-    assert await wipe.run(args, exports_dir=exports) == 0
+    assert await wipe.run(args) == 0
     assert await db.chatmessages.count_documents({}) == 0
     assert await db.users.count_documents({"role": "admin"}) == 1

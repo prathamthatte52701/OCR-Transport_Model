@@ -32,15 +32,11 @@ def limiter_on() -> Iterator[None]:
 async def test_identical_response_for_every_case_and_no_rows_for_ineligible(
     client: Any, db: Any, make_user: Any
 ) -> None:
-    pending = await make_user(status="pending")
-    rejected = await make_user(status="rejected")
     admin = await make_user(role="admin")
     google = await make_user(password=None)
     valid = await make_user()
     cases = [
         "ghost-nobody@looptest.local",
-        pending.email,
-        rejected.email,
         admin.email,
         google.email,
         valid.email,
@@ -172,9 +168,9 @@ async def test_audit_logged_without_note_and_no_row_for_ineligible_audit(
     client: Any, db: Any, make_user: Any
 ) -> None:
     u = await make_user()
-    ghost = await make_user(status="pending")
+    ineligible = await make_user(role="admin")
     await client.post(URL, json={"email": u.email, "note": "SECRETNOTE-123"})
-    await client.post(URL, json={"email": ghost.email, "note": "SECRETNOTE-456"})
+    await client.post(URL, json={"email": ineligible.email, "note": "SECRETNOTE-456"})
     logs = await db.auditlogs.find({"action": "PASSWORD_RESET_REQUESTED"}).to_list(None)
     assert [x["userId"] for x in logs] == [u.id]
     assert "SECRETNOTE" not in str(await db.auditlogs.find({}).to_list(None))

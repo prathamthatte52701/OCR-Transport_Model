@@ -12,7 +12,6 @@ from app.features.admin import router as admin_router
 from app.features.documents import correction_rules
 from app.features.documents import router as docs_router
 
-TI = "Tax Invoice"
 CHANGED = "This document changed while you were editing. Please reload and try again."
 
 
@@ -21,14 +20,12 @@ async def _doc(db: Any, owner: Any, status: str = "processed", **extra: Any) -> 
     res = await db.documents.insert_one(
         {
             "userId": owner.id,
-            "documentType": TI,
             "originalFilename": "a.png",
             "uploadStatus": status,
             "processingRunId": "run-old",
-            "taxInvoiceNo": "OLD1",
-            "referenceNo": None,
+            "receiptNumber": "OLD1",
+            "operatorName": None,
             "date": None,
-            "number": None,
             "isDeleted": False,
             "edited": False,
             "createdAt": now,
@@ -63,15 +60,15 @@ async def test_same_rules_on_both_routes(client: Any, db: Any, make_user: Any, r
     owner = await make_user()
     acct = owner if route == "user" else await make_user(role="admin")
     doc_id = await _doc(db, owner)
-    long_value = "A" * 41
-    r = await _patch(client, route, acct, doc_id, "taxInvoiceNo", long_value)
-    assert r.status_code == 400 and "max 40" in r.json()["detail"]
-    r = await _patch(client, route, acct, doc_id, "taxInvoiceNo", "=HYPERLINK(x)")
+    long_value = "A" * 301
+    r = await _patch(client, route, acct, doc_id, "receiptNumber", long_value)
+    assert r.status_code == 400 and "max 300" in r.json()["detail"]
+    r = await _patch(client, route, acct, doc_id, "receiptNumber", "<script>x</script>")
     assert r.status_code == 400
     r = await _patch(client, route, acct, doc_id, "date", "99/99/2020")
     assert r.status_code == 400 and "year 2000-2100" in r.json()["detail"]
     assert await db.corrections.count_documents({}) == 0
-    r = await _patch(client, route, acct, doc_id, "taxInvoiceNo", "INV-7")
+    r = await _patch(client, route, acct, doc_id, "receiptNumber", "INV-7")
     assert r.status_code == 200
 
 
@@ -82,10 +79,10 @@ async def test_still_processing_is_409_on_both_routes(
     owner = await make_user()
     acct = owner if route == "user" else await make_user(role="admin")
     doc_id = await _doc(db, owner, status="uploaded")
-    r = await _patch(client, route, acct, doc_id, "taxInvoiceNo", "INV-7")
+    r = await _patch(client, route, acct, doc_id, "receiptNumber", "INV-7")
     assert r.status_code == 409 and "still being processed" in r.json()["detail"]
     assert await db.corrections.count_documents({}) == 0
-    assert (await db.documents.find_one({"_id": doc_id}))["taxInvoiceNo"] == "OLD1"
+    assert (await db.documents.find_one({"_id": doc_id}))["receiptNumber"] == "OLD1"
 
 
 # ---------------- N9: conditional write ----------------
@@ -102,7 +99,7 @@ def _simulate_reprocess_between_read_and_write(monkeypatch: pytest.MonkeyPatch, 
                 "$set": {
                     "uploadStatus": "uploaded",
                     "processingRunId": "run-new",
-                    "taxInvoiceNo": None,
+                    "receiptNumber": None,
                     "edited": False,
                 }
             },
@@ -121,13 +118,13 @@ async def test_reprocess_between_read_and_write_refuses_correction(
     acct = owner if route == "user" else await make_user(role="admin")
     doc_id = await _doc(db, owner)
     _simulate_reprocess_between_read_and_write(monkeypatch, db)
-    r = await _patch(client, route, acct, doc_id, "taxInvoiceNo", "INV-7")
+    r = await _patch(client, route, acct, doc_id, "receiptNumber", "INV-7")
     assert r.status_code == 409 and r.json()["detail"] == CHANGED
     assert await db.corrections.count_documents({}) == 0
     assert await db.auditlogs.count_documents({"action": "document_corrected"}) == 0
     d = await db.documents.find_one({"_id": doc_id})
     assert d["processingRunId"] == "run-new" and d["uploadStatus"] == "uploaded"
-    assert d["taxInvoiceNo"] is None and d["edited"] is False  # reprocess result intact
+    assert d["receiptNumber"] is None and d["edited"] is False  # reprocess result intact
 
 
 @pytest.mark.parametrize("route", ["user", "admin"])
@@ -138,7 +135,7 @@ async def test_missing_run_id_still_correctable(
     acct = owner if route == "user" else await make_user(role="admin")
     doc_id = await _doc(db, owner)
     await db.documents.update_one({"_id": doc_id}, {"$unset": {"processingRunId": ""}})
-    r = await _patch(client, route, acct, doc_id, "taxInvoiceNo", "INV-8")
+    r = await _patch(client, route, acct, doc_id, "receiptNumber", "INV-8")
     assert r.status_code == 200
     assert await db.corrections.count_documents({"documentId": doc_id}) == 1
 
@@ -155,14 +152,14 @@ async def test_50_concurrent_correct_vs_reprocess(client: Any, db: Any, make_use
                 "$set": {
                     "uploadStatus": "uploaded",
                     "processingRunId": "run-new",
-                    "taxInvoiceNo": None,
+                    "receiptNumber": None,
                     "edited": False,
                 }
             },
         )
 
     results = await asyncio.gather(
-        *[_patch(client, "user", owner, i, "taxInvoiceNo", "NEWVAL") for i in ids],
+        *[_patch(client, "user", owner, i, "receiptNumber", "NEWVAL") for i in ids],
         *[claim(i) for i in ids],
     )
     codes = [r.status_code for r in results[:50]]
@@ -172,7 +169,7 @@ async def test_50_concurrent_correct_vs_reprocess(client: Any, db: Any, make_use
         rows = await db.corrections.count_documents({"documentId": doc_id})
         assert rows == (1 if code == 200 else 0)
         # a refused or overtaken correction must never survive a reprocess claim
-        assert d["uploadStatus"] == "uploaded" and d["taxInvoiceNo"] is None
+        assert d["uploadStatus"] == "uploaded" and d["receiptNumber"] is None
 
 
 # ---------------- N6: corrections removed with the document ----------------
@@ -180,7 +177,7 @@ async def test_50_concurrent_correct_vs_reprocess(client: Any, db: Any, make_use
 
 async def _with_correction(db: Any, owner: Any) -> ObjectId:
     doc_id = await _doc(db, owner)
-    await db.corrections.insert_one({"documentId": doc_id, "fieldKey": "number"})
+    await db.corrections.insert_one({"documentId": doc_id, "fieldKey": "receiptNumber"})
     return doc_id
 
 
@@ -243,7 +240,7 @@ async def test_insert_failure_deletes_gridfs_file(
 
     monkeypatch.setattr(docs_router, "get_database", lambda: FakeDb())
     with pytest.raises(RuntimeError, match="insert down"):
-        await docs_router._validate_and_store(_png(), "image/png", "a.png", TI, u.id)
+        await docs_router._validate_and_store(_png(), "image/png", "a.png", u.id)
     assert await _gridfs_count(db) == before
 
 
@@ -271,5 +268,5 @@ async def test_insert_failure_and_delete_failure_records_orphan(
     monkeypatch.setattr(docs_router, "delete_file", bad_delete)
     monkeypatch.setattr(docs_router, "record_orphaned_file", rec)
     with pytest.raises(RuntimeError, match="insert down"):
-        await docs_router._validate_and_store(_png(), "image/png", "a.png", TI, u.id)
+        await docs_router._validate_and_store(_png(), "image/png", "a.png", u.id)
     assert len(recorded) == 1 and recorded[0][2] == u.id and recorded[0][4] == "OSError"

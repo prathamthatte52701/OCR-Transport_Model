@@ -182,8 +182,8 @@ async def test_removed_names(db: Any, make_user: Any) -> None:
 async def test_send_validation(db: Any, make_user: Any) -> None:
     u, a = await make_user(), await make_user(role="admin")
     u2 = await make_user()
-    pending = await make_user(role="admin", status="pending")
-    for target in (str(u.id), str(pending.id), "bad", None):
+    other_user = await make_user()
+    for target in (str(u.id), str(other_user.id), "bad", None):
         with pytest.raises(ChatError) as e:
             await service.send_user_message(db, u.id, target, "hi")
         assert e.value.status == 422

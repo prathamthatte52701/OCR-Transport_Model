@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.core.database import get_database
 from app.core.image_limits import ImageTooLarge, check_upload
 from app.features.ocr.ai_extraction import extract_header
+from app.features.documents.duplicate import check_duplicate
 from app.features.ocr.extraction import extraction_success_fields
 from app.features.ocr.paddle_runner import (
     OCR_TIMEOUT_SECONDS_IMAGE,
@@ -28,13 +29,12 @@ from app.features.ocr.paddle_runner import (
 )
 from app.features.ocr.page_normalize import normalize_photo
 from app.features.ocr.preprocessing import (
-    HEADER_CROP_RATIO,
     LARGE_TEXT_DET_LIMIT,
     LARGE_TEXT_DET_LIMIT_STEP,
     ORIENTATION_CHECK_STEP,
-    PHOTO_HEADER_CROP_RATIO,
     assess_and_preprocess,
     crop_header,
+    crop_left_copy,
     get_pdf_header_text_or_image,
 )
 from app.features.ocr.providers.errors import (
@@ -292,29 +292,26 @@ async def _classify_under_lock(png: bytes) -> tuple[int, float]:
 
 
 async def _extract_header_text(buffer: bytes, mime_type: str) -> str | None:
-    """Returns the header-region OCR/text-layer text, or None on failure -
-    mirrors the old app's extractHeaderText()."""
+    """Returns the full-page OCR/text-layer text, or None on failure - receipt fields run
+    across the whole page, unlike ACKN's header-only crop."""
     cut_from_background = False
     try:
         if mime_type == "application/pdf":
-            text, header_png = await get_pdf_header_text_or_image(buffer)
+            text, page_png = await get_pdf_header_text_or_image(buffer)
             if text:
                 return text
-            if header_png is None:
+            if page_png is None:
                 return None
-            image_bytes = header_png
+            image_bytes = page_png
         else:
-            # Photos only: find the paper and fix sideways/upside-down shots
-            # so the fixed top-30% crop below lands on the header. A scan or
+            # Photos only: find the paper and fix sideways/upside-down shots. A scan or
             # tight upright photo comes back as the original bytes, untouched.
             # The orientation classifier is a Paddle predictor, so it runs
             # under the same lock as OCR; the lock is released before the
             # OCR block below re-acquires it.
             page_bytes = await _normalize_photo_page(buffer)
             cut_from_background = page_bytes != buffer
-            image_bytes = crop_header(
-                page_bytes, PHOTO_HEADER_CROP_RATIO if cut_from_background else HEADER_CROP_RATIO
-            )
+            image_bytes = crop_left_copy(crop_header(page_bytes))  # full page; two-copy slip keeps left copy
 
         # Feature 6: quality-gated preprocessing on the header crop itself -
         # skips straight through (unmodified bytes) when the crop is already
@@ -435,7 +432,6 @@ async def _fail_ocr(
     code: str,
     error_class: str | None,
     message: str,
-    document_type: str,
     mime_type: str,
     started: float,
     run_id: str | None,
@@ -445,7 +441,7 @@ async def _fail_ocr(
     never the OCR text, a file name, a key or a prompt."""
     logger.error(
         f"OCR failed: code={code} class={error_class or '-'} msg={message[:200]} "
-        f"doctype={document_type} mime={mime_type} elapsed={time.monotonic() - started:.1f}s"
+        f"mime={mime_type} elapsed={time.monotonic() - started:.1f}s"
     )
     await _update_active_document(
         doc_id,
@@ -462,7 +458,6 @@ async def process_document(
     doc_id: ObjectId,
     buffer: bytes,
     mime_type: str,
-    document_type: str,
     run_id: str | None = None,
 ) -> None:
     """Full OCR -> AI extraction -> validation pipeline for one document -
@@ -487,7 +482,6 @@ async def process_document(
                 OCR_ENGINE_ERROR,
                 exc.cls_name,
                 exc.short,
-                document_type,
                 mime_type,
                 started,
                 run_id,
@@ -499,7 +493,6 @@ async def process_document(
                 OCR_TIMEOUT,
                 "TimeoutError",
                 str(exc),
-                document_type,
                 mime_type,
                 started,
                 run_id,
@@ -519,12 +512,12 @@ async def process_document(
             return
         if not header_text or not header_text.strip():
             await _fail_ocr(
-                doc_id, NO_TEXT, None, "no text found", document_type, mime_type, started, run_id
+                doc_id, NO_TEXT, None, "no text found", mime_type, started, run_id
             )
             return
 
         try:
-            result = await extract_header(document_type, header_text)
+            result = await extract_header(header_text)
         except Exception as exc:  # noqa: BLE001
             code, status = classify_exception(exc)
             model = (
@@ -556,6 +549,12 @@ async def process_document(
             "processedAt": datetime.now(UTC),
         }
         update.update(extraction_success_fields(result))
+
+        db = get_database()
+        owner = await db.documents.find_one({"_id": doc_id}, {"userId": 1})
+        if owner is not None:
+            update["isDuplicate"] = await check_duplicate(db, owner["userId"], doc_id, update)
+
         if await _update_active_document(doc_id, update, run_id):
             await _log_processed(doc_id)
     except Exception as exc:  # noqa: BLE001

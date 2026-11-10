@@ -29,7 +29,6 @@ async def _insert(db: Any, user: Any, **extra: Any) -> Any:
     doc = {
         "userId": user.id,
         "uploadStatus": "failed",
-        "documentType": "Delivery Challan",
         "isDeleted": False,
         "originalName": "a.pdf",
         "gridFsFileId": ObjectId(),

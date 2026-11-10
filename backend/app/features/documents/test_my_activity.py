@@ -37,7 +37,6 @@ async def _upload(client: Any, user: Any) -> str:
         "/api/documents/upload",
         headers=user.headers,
         files={"document": ("a.pdf", io.BytesIO(PDF), "application/pdf")},
-        data={"documentType": "Delivery Challan"},
     )
     assert res.status_code == 201, res.text
     return str(res.json()["document"]["_id"])
@@ -61,27 +60,27 @@ async def test_user_actions_each_log_one_entry_only_for_owner(
         return "header"
 
     async def fake_extract(*_a: Any, **_k: Any) -> dict:
-        return {"number": "820000001", "date": "01/01/2026"}
+        return {"receiptNumber": "820000001", "date": "01/01/2026"}
 
     monkeypatch.setattr(pipeline, "_extract_header_text", fake_text)
     monkeypatch.setattr(pipeline, "extract_header", fake_extract)
     # a real job always carries the run id its document was given when it was started
     run_id = (await db.documents.find_one({"_id": ObjectId(doc_id)}))["processingRunId"]
     await pipeline.process_document(
-        ObjectId(doc_id), PDF, "application/pdf", "Delivery Challan", run_id
+        ObjectId(doc_id), PDF, "application/pdf", run_id
     )
     assert _actions(await _activity(client, a)).count("document_processed") == 1
 
     res = await client.patch(
         f"/api/documents/{doc_id}/correct",
         headers=a.headers,
-        json={"field": "number", "value": "820000002"},
+        json={"field": "receiptNumber", "value": "820000002"},
     )
     assert res.status_code == 200, res.text
     body = await _activity(client, a)
     corrected = [e for e in body["activity"] if e["action"] == "document_corrected"]
     assert len(corrected) == 1
-    assert corrected[0]["context"]["field"] == "number"
+    assert corrected[0]["context"]["field"] == "receiptNumber"
     assert "820000002" not in str(corrected[0]["context"])
 
     res = await client.post(f"/api/documents/{doc_id}/reprocess", headers=a.headers)

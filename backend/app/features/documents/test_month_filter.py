@@ -7,7 +7,7 @@ import pytest
 
 
 async def _seed(
-    db: Any, owner: Any, number: str, date: Any, dtype: str = "Delivery Challan"
+    db: Any, owner: Any, number: str, date: Any
 ) -> None:
     now = datetime.now(UTC)
     doc: dict[str, Any] = {
@@ -17,14 +17,12 @@ async def _seed(
         "mimeType": "application/pdf",
         "size": 1,
         "uploadStatus": "processed",
-        "documentType": dtype,
         "edited": False,
-        "exported": False,
         "isDeleted": False,
         "createdAt": now,
         "updatedAt": now,
     }
-    doc["taxInvoiceNo" if dtype == "Tax Invoice" else "number"] = number
+    doc["receiptNumber"] = number
     if date != "MISSING":
         doc["date"] = date
     await db.documents.insert_one(doc)
@@ -37,7 +35,7 @@ async def _list(client: Any, user: Any, **params: Any) -> Any:
 async def _numbers(client: Any, user: Any, **params: Any) -> set[str]:
     res = await _list(client, user, **params)
     assert res.status_code == 200, res.text
-    return {d.get("taxInvoiceNo") or d.get("number") for d in res.json()["documents"]}
+    return {d["receiptNumber"] for d in res.json()["documents"]}
 
 
 @pytest.fixture
@@ -46,7 +44,7 @@ async def seeded(db: Any, make_user: Any) -> Any:
     b = await make_user()
     await _seed(db, a, "C-OCT-1", "05/10/2026")
     await _seed(db, a, "C-OCT-2", "31/10/2026")
-    await _seed(db, a, "T-OCT-1", "15/10/2026", "Tax Invoice")
+    await _seed(db, a, "T-OCT-1", "15/10/2026")
     await _seed(db, a, "C-SEP-1", "30/09/2026")
     await _seed(db, a, "C-OCT-2025", "05/10/2025")
     await _seed(db, a, "C-NULL", None)
@@ -56,13 +54,8 @@ async def seeded(db: Any, make_user: Any) -> Any:
     return a
 
 
-async def test_month_matches_only_that_month_both_types(client: Any, seeded: Any) -> None:
+async def test_month_matches_only_that_month(client: Any, seeded: Any) -> None:
     assert await _numbers(client, seeded, month="2026-10") == {"C-OCT-1", "C-OCT-2", "T-OCT-1"}
-
-
-async def test_documenttype_narrows_within_month(client: Any, seeded: Any) -> None:
-    got = await _numbers(client, seeded, month="2026-10", documentType="Tax Invoice")
-    assert got == {"T-OCT-1"}
 
 
 async def test_month_none_returns_missing_null_and_odd_dates(client: Any, seeded: Any) -> None:

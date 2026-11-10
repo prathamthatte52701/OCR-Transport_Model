@@ -173,21 +173,21 @@ class SeqProvider(AIProvider):
         return str(r)
 
 
-GOOD = json.dumps({"number": "820000001", "date": "01/01/2026"})
+GOOD = json.dumps({"receiptNumber": "820000001", "date": "01/01/2026"})
 
 
 @pytest.mark.parametrize("bad", ["[1,2]", '"text"', "null", "42"])
 async def test_non_dict_reply_retries_once_then_bad_reply(bad: str) -> None:
     p = SeqProvider([bad, bad, GOOD])
     with pytest.raises(AIExtractionError) as ei:
-        await extract_header("Delivery Challan", "hdr", provider=p)
+        await extract_header("hdr", provider=p)
     assert ei.value.code == errors.BAD_REPLY
     assert p.calls == 2
 
 
 async def test_bad_then_good_succeeds() -> None:
     p = SeqProvider(["[1]", GOOD])
-    result = await extract_header("Delivery Challan", "hdr", provider=p)
+    result = await extract_header("hdr", provider=p)
     assert isinstance(result, dict)
     assert p.calls == 2
 
@@ -195,7 +195,7 @@ async def test_bad_then_good_succeeds() -> None:
 async def test_provider_error_propagates_unchanged() -> None:
     boom = AIExtractionError(errors.RATE_LIMIT, 429, "m")
     with pytest.raises(AIExtractionError) as ei:
-        await extract_header("Delivery Challan", "hdr", provider=SeqProvider([boom]))
+        await extract_header("hdr", provider=SeqProvider([boom]))
     assert ei.value is boom
 
 
@@ -213,7 +213,6 @@ async def _run_pipeline(
         {
             "userId": ObjectId(),
             "uploadStatus": "uploaded",
-            "documentType": "Delivery Challan",
             "isDeleted": False,
             **row,
         }
@@ -229,7 +228,7 @@ async def _run_pipeline(
     sink = logger.add(lambda m: lines.append(str(m)), format="{message}", level="DEBUG")
     try:
         await pipeline.process_document(
-            res.inserted_id, b"%PDF-1.4 x", "application/pdf", "Delivery Challan"
+            res.inserted_id, b"%PDF-1.4 x", "application/pdf"
         )
     finally:
         logger.remove(sink)
@@ -294,7 +293,7 @@ async def test_pipeline_log_has_model_and_status(db: Any, monkeypatch: pytest.Mo
 
 async def test_pipeline_success_clears_code(db: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_extract(*_a: Any, **_k: Any) -> dict:
-        return {"number": "820000001", "date": "01/01/2026"}
+        return {"receiptNumber": "820000001", "date": "01/01/2026"}
 
     doc, _ = await _run_pipeline(db, monkeypatch, fake_extract, processingErrorCode="RATE_LIMIT")
     assert doc["processingErrorCode"] is None
@@ -313,7 +312,7 @@ async def test_deeply_nested_json_reply_is_a_bad_reply_not_unknown() -> None:
             return "[" * 10000
 
     with pytest.raises(AIExtractionError) as info:
-        await extract_header("Delivery Challan", "hdr", provider=Nested())
+        await extract_header("hdr", provider=Nested())
     assert info.value.code == BAD_REPLY and Nested.calls == 2
 
 

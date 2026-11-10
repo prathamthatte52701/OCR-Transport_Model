@@ -227,11 +227,9 @@ async def test_wipe_dry_run_counts_chat_files_and_apply_removes_them(
     u, adm, _ = trio
     await send(client, u, adm)
     capsys.readouterr()
-    assert await wipe.run(["--db", db.name], exports_dir=tmp_path) == 0
+    assert await wipe.run(["--db", db.name]) == 0
     out = capsys.readouterr().out
     assert "Chat GridFS: 1 files" in out and await stored_count(db) == (1, 1)
-    assert (
-        await wipe.run(["--db", db.name, "--apply", "--i-have-a-backup"], exports_dir=tmp_path) == 0
-    )
+    assert await wipe.run(["--db", db.name, "--apply", "--i-have-a-backup"]) == 0
     assert await stored_count(db) == (0, 0)
     assert await db["chatfs.chunks"].count_documents({}) == 0

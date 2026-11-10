@@ -9,7 +9,6 @@ from typing import Any
 
 import pytest
 from bson import ObjectId
-from google.oauth2 import id_token as google_id_token
 from loguru import logger
 
 REQ = "/api/auth/password-reset-request"
@@ -88,12 +87,10 @@ async def test_counts_added_to_existing_admin_responses(
     client: Any, db: Any, make_user: Any
 ) -> None:
     admin = await make_user(role="admin")
-    await make_user(status="pending")
     u = await make_user()
     await _open_request(client, u)
     users = (await client.get("/api/admin/users", headers=admin.headers)).json()
     assert users["passwordRequestCount"] == 1
-    assert users["pendingCount"] == 1 and "statusCounts" in users
 
 
 # ---------- temp password ----------
@@ -307,26 +304,6 @@ async def test_login_without_request_creates_nothing(client: Any, db: Any, make_
     assert await db.passwordresetrequests.count_documents({}) == 0
 
 
-async def test_google_link_clears_temp_password_and_closes_request(
-    client: Any, db: Any, make_user: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    admin, u = await make_user(role="admin"), await make_user()
-    await _flagged_login(client, db, admin, u)
-    await db.passwordresetrequests.update_one({"userId": u.id}, {"$set": {"status": "open"}})
-    monkeypatch.setattr(
-        google_id_token,
-        "verify_oauth2_token",
-        lambda *_a, **_k: {"email": u.email, "email_verified": True, "sub": "g-flag"},
-    )
-    r = await client.post("/api/auth/google", json={"idToken": "fake"})
-    assert r.status_code == 200, r.text
-    # linking replaces the password (temp one included), so there is nothing left to change
-    assert r.json()["user"]["mustChangePassword"] is False
-    doc = await db.users.find_one({"_id": u.id})
-    assert doc["mustChangePassword"] is False and "passwordHash" not in doc
-    assert (await db.passwordresetrequests.find_one({"userId": u.id}))["status"] == "done"
-
-
 # ---------- secrecy ----------
 
 
@@ -362,7 +339,6 @@ async def test_passwords_never_in_logs_or_audit(client: Any, db: Any, make_user:
 PUBLIC = {
     ("POST", "/api/auth/signup"),
     ("POST", "/api/auth/login"),
-    ("POST", "/api/auth/google"),
     ("POST", "/api/auth/password-reset-request"),
     ("GET", "/api/health"),
     ("GET", "/health"),

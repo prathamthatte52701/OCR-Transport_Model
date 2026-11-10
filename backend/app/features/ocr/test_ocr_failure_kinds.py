@@ -97,8 +97,8 @@ def fake(monkeypatch: pytest.MonkeyPatch) -> Iterator[Fake]:
     monkeypatch.setattr(pipeline, "run_ocr", f.run_ocr)
     monkeypatch.setattr(pipeline, "classify_page_orientation", f.classify)
 
-    async def ai(_t: str, _text: str) -> dict[str, Any]:
-        return {"number": "123", "date": "01/01/2026"}
+    async def ai(_text: str, **_k: Any) -> dict[str, Any]:
+        return {"receiptNumber": "123", "date": "01/01/2026"}
 
     monkeypatch.setattr(pipeline, "extract_header", ai)
     try:
@@ -127,7 +127,6 @@ async def _doc(db: Any, make_user: Any, mime: str = "image/png") -> ObjectId:
     doc = {
         "userId": user.id,
         "uploadStatus": "uploaded",
-        "documentType": "Delivery Challan",
         "isDeleted": False,
         "originalName": "a.png",
         "mimeType": mime,
@@ -141,7 +140,7 @@ async def run_doc(
     db: Any, make_user: Any, buf: bytes = PNG, mime: str = "image/png"
 ) -> dict[str, Any]:
     did = await _doc(db, make_user, mime)
-    await asyncio.wait_for(pipeline.process_document(did, buf, mime, "Delivery Challan"), 10)
+    await asyncio.wait_for(pipeline.process_document(did, buf, mime), 10)
     d: dict[str, Any] = await db.documents.find_one({"_id": did})
     return d
 
@@ -193,7 +192,7 @@ async def test_engine_runtime_error(fake: Fake, logs: Logs, db: Any, make_user: 
     assert len(lines) == 1, logs.records
     line = lines[0]
     assert "code=OCR_ENGINE_ERROR" in line and "class=RuntimeError" in line
-    assert "Delivery Challan" in line and "image/png" in line
+    assert "image/png" in line
 
 
 async def test_log_never_contains_ocr_text(fake: Fake, logs: Logs, db: Any, make_user: Any) -> None:
@@ -242,7 +241,7 @@ async def test_timeout_keeps_lock_then_second_runs(
     failed_with(d, "OCR_TIMEOUT", TIMEOUT_MSG)
     assert st()["held"] is True
     did2 = await _doc(db, make_user)
-    second = asyncio.create_task(pipeline.process_document(did2, PNG, "image/png", "x"))
+    second = asyncio.create_task(pipeline.process_document(did2, PNG, "image/png"))
     await asyncio.sleep(0.2)
     assert fake.calls == 1 and not second.done()
     fake.gate.set()
@@ -307,7 +306,7 @@ async def test_wedged_slot_is_stuck(fake: Fake, db: Any, make_user: Any) -> None
     fake.block_first = True
     await run_doc(db, make_user)  # times out, orphans the slot
     waiting = asyncio.create_task(
-        pipeline.process_document(await _doc(db, make_user), PNG, "image/png", "x")
+        pipeline.process_document(await _doc(db, make_user), PNG, "image/png")
     )
     await until(lambda: st()["wedged"], 3)
     await asyncio.wait_for(waiting, 2)
@@ -367,7 +366,6 @@ async def test_reprocess_after_engine_error(
             {
                 "userId": user.id,
                 "uploadStatus": "failed",
-                "documentType": "Delivery Challan",
                 "isDeleted": False,
                 "originalName": "a.png",
                 "gridFsFileId": ObjectId(),

@@ -6,9 +6,6 @@ import pytest
 
 from app.features.chat.chat_testkit import BASE, admin_send, assert_created, seed, thread, user_send
 
-PENDING = "Waiting for admin approval."
-REJECTED = "Your request was not approved. Contact the admin."
-
 ROUTES = [
     ("GET", "/admins", None),
     ("GET", "/threads", None),
@@ -91,17 +88,6 @@ async def test_admin_cannot_message_another_admin_or_missing_user(
     assert await db.chatmessages.count_documents({}) == 0
 
 
-async def test_admin_cannot_message_pending_user(client: Any, make_user: Any, db: Any) -> None:
-    adm, u = await make_user(role="admin"), await make_user(status="pending")
-    assert (await admin_send(client, adm, u, "x")).status_code in (400, 404, 422)
-    assert await db.chatmessages.count_documents({}) == 0
-
-
-async def test_user_cannot_message_pending_admin(client: Any, make_user: Any) -> None:
-    adm, u = await make_user(role="admin", status="pending"), await make_user()
-    assert (await user_send(client, u, adm, "x")).status_code in (400, 404, 422)
-
-
 @pytest.mark.parametrize(
     "method,path,body",
     [
@@ -143,33 +129,13 @@ async def test_admin_endpoints_work_for_both_admins(client: Any, make_user: Any,
         assert_created(await admin_send(client, adm, u, f"from {adm.id}"))
 
 
-async def test_user_sees_approved_admins_only(client: Any, make_user: Any) -> None:
+async def test_user_sees_admins_list(client: Any, make_user: Any) -> None:
     a1 = await make_user(role="admin", username="adminone")
-    await make_user(role="admin", status="pending")
-    await make_user(role="admin", status="rejected")
     u = await make_user()
     r = await client.get(f"{BASE}/admins", headers=u.headers)
     assert r.status_code == 200
     assert [x["id"] for x in r.json()] == [str(a1.id)]
     assert set(r.json()[0]) == {"id", "name"}
-
-
-@pytest.mark.parametrize("method,path,body", ROUTES)
-async def test_pending_user_refused(
-    client: Any, make_user: Any, method: str, path: str, body: Any
-) -> None:
-    u = await make_user(status="pending")
-    r = await _call(client, u, method, path, body)
-    assert r.status_code == 403 and r.json()["detail"]["message"] == PENDING
-
-
-@pytest.mark.parametrize("method,path,body", ROUTES)
-async def test_rejected_user_refused(
-    client: Any, make_user: Any, method: str, path: str, body: Any
-) -> None:
-    u = await make_user(status="rejected")
-    r = await _call(client, u, method, path, body)
-    assert r.status_code == 403 and r.json()["detail"]["message"] == REJECTED
 
 
 @pytest.mark.parametrize("method,path,body", ROUTES)

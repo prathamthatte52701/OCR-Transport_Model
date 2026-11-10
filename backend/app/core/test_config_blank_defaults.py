@@ -12,8 +12,8 @@ from pydantic import ValidationError
 from app.core.config import Settings
 
 DEFAULT_DB = "docintel_transport"
-DEFAULT_FRONTEND = "http://localhost:5174"
-DEFAULT_ADMIN = "http://localhost:5175"
+DEFAULT_FRONTEND = "http://localhost:3000"
+DEFAULT_ADMIN = "http://localhost:4000"
 FAKE_URI = "mongodb://localhost:27017/placeholder"
 FAKE_SECRET = "x" * 48
 ENV_KEYS = ("MONGO_URI", "MONGO_DB_NAME", "JWT_SECRET", "FRONTEND_ORIGIN", "ADMIN_ORIGIN")

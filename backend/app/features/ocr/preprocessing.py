@@ -8,30 +8,12 @@ from PIL import Image
 
 from app.features.ocr.row_assembly import assemble_rows
 
-# Crops to the top ~30% of the page (Reference No./Delivery Challan No. + date
-# row always lives there on both templates) before OCR - ported from the old
-# ocr.js HEADER_CROP_RATIO, so OCR never has to fight the item table/stamps/
-# signatures below it.
-#
-# Raised from 0.28 to 0.30: a live accuracy test found 6/8 and 5/6 digit
-# misreads in the Tax Invoice No./Reference No. row on documents whose
-# printed header table runs slightly taller than 28% of the page (scan DPI,
-# margins, and address-block length vary per document) - the last header row
-# was getting its glyphs shaved at the crop boundary, and those two digit
-# pairs are exactly the ones most sensitive to a clipped stroke. This is a
-# conservative, empirical safety-margin increase, not content-aware boundary
-# detection - a two-pass "find the real table start" approach would double
-# OCR calls per document and is deliberately out of scope (see the
-# module-level scope note below). Capped at 0.30 rather than going higher:
-# test_preprocessing.py's test_crop_header_keeps_table_out_for_normal_page
-# fixture puts a normally-proportioned invoice's item table at 31.25% of
-# page height, so anything past that starts eating into the item
-# table/stamps/signatures region this ratio exists to keep out.
-HEADER_CROP_RATIO = 0.30
-# Camera photos whose paper was cut out of a background (page_normalize) keep a
-# little background/margin above the sheet, which pushes the number row below a
-# 30% cut. 42% reliably includes it (15/15 on the hard Delivery Challan photos).
-PHOTO_HEADER_CROP_RATIO = 0.42
+# Transport receipts carry fields across the WHOLE page (operator header, route,
+# consignor/consignee, money table, signature row), not just a header band - unlike
+# ACKN's invoices, there is no crop here. FULL_PAGE_RATIO = 1.0 keeps crop_header as a
+# single pass-through re-encode step (so the rest of the pipeline - preprocessing,
+# OCR - doesn't need a separate "no crop" branch).
+FULL_PAGE_RATIO = 1.0
 
 # Wraps in-process PDF parsing (PyMuPDF) in a timeout - a malformed/hostile
 # PDF must never be able to hang the whole server, mirrors the old app's
@@ -45,7 +27,7 @@ PDF_PARSE_TIMEOUT_SECONDS = 60
 PDF_RENDER_SCALE = 2.5
 
 
-def crop_header(image_bytes: bytes, ratio: float = HEADER_CROP_RATIO) -> bytes:
+def crop_header(image_bytes: bytes, ratio: float = FULL_PAGE_RATIO) -> bytes:
     with Image.open(io.BytesIO(image_bytes)) as img:
         width, height = img.size
         crop_height = max(1, round(height * ratio))
@@ -53,6 +35,40 @@ def crop_header(image_bytes: bytes, ratio: float = HEADER_CROP_RATIO) -> bytes:
         buf = io.BytesIO()
         cropped.convert("RGB").save(buf, format="PNG")
         return buf.getvalue()
+
+
+# Two-copy slips (customer + office copy side by side in one photo) are ~2.2:1; every
+# single receipt in the sample set is <= 1.55:1.
+_TWO_COPY_MIN_ASPECT = 1.9
+# The seam must be a vertical ink line at least this fraction of the page height.
+_SEAM_MIN_HEIGHT_FRACTION = 0.3
+
+
+def crop_left_copy(image_bytes: bytes) -> bytes:
+    """Keeps only the LEFT copy of a side-by-side two-copy slip, else returns the bytes untouched.
+
+    Conservative on purpose: needs BOTH an unusually wide page AND a long vertical seam line
+    in the 30-70% band, so a normal single receipt is never cropped.
+    ponytail: stacked (top/bottom) copies and seamless/torn slips are not detected; add when
+    a real sample needs it."""
+    try:
+        img = _decode(image_bytes)
+    except ValueError:
+        return image_bytes
+    h, w = img.shape[:2]
+    if w / h < _TWO_COPY_MIN_ASPECT:
+        return image_bytes
+    g = img.min(axis=2).astype(np.float32)
+    bg = cv2.GaussianBlur(cv2.dilate(g, np.ones((25, 25), np.uint8)), (0, 0), 20)
+    ink = ((g / np.maximum(bg, 1)) < 0.7).astype(np.uint8) * 255
+    ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((15, 1), np.uint8))  # bridge dashes
+    ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((int(h * _SEAM_MIN_HEIGHT_FRACTION), 1), np.uint8))
+    lo, hi = int(w * 0.3), int(w * 0.7)
+    cols = (ink[:, lo:hi] > 0).sum(axis=0)
+    if cols.max() == 0:
+        return image_bytes
+    seam = lo + int(np.argmax(cols))
+    return _encode(img[:, :seam])
 
 
 def _pdf_page_count_sync(buffer: bytes) -> int | None:
@@ -123,7 +139,7 @@ async def get_pdf_header_text_or_image(buffer: bytes) -> tuple[str | None, bytes
     png_bytes = await asyncio.wait_for(
         asyncio.to_thread(_pdf_render_page_to_png_sync, buffer), timeout=PDF_PARSE_TIMEOUT_SECONDS
     )
-    return None, crop_header(png_bytes)
+    return None, png_bytes
 
 
 # --- Feature 6: quality-gated OCR preprocessing -----------------------------
@@ -135,24 +151,17 @@ async def get_pdf_header_text_or_image(buffer: bytes) -> tuple[str | None, bytes
 # byte-for-byte, never degraded. Every branch is independently triggered by
 # its own heuristic; there is no single on/off switch.
 #
-# Scope boundary (deliberate, not an oversight): this pipeline only ever OCRs
-# the top-30% header crop (see HEADER_CROP_RATIO), not the full page. So:
+# Scope boundary (deliberate, not an oversight): this pipeline runs on the FULL page
+# (crop_header is a pass-through at FULL_PAGE_RATIO = 1.0 for Transport receipts). So:
 #   - "Watermark/stamp/seal suppression" here means adaptive contrast-based
-#     text-vs-background separation *within that crop*, not general watermark
-#     segmentation - there's no dedicated segmentation model, that would be
-#     solving a problem this pipeline mostly doesn't have.
-#   - Multi-column layouts / table-dominant pages are effectively out of
-#     scope by construction (they live below the header), verified with a
-#     synthetic test case in test_preprocessing.py rather than assumed - no
-#     PP-Structure layout analysis was needed.
-#   - Gross full-page rotation (90/180/270) is only *partially* recoverable
-#     here: if the original page itself was rotated before crop_header ran,
-#     the "top 28%" crop already grabbed the wrong region, and no amount of
-#     preprocessing on that crop recovers the real header. The orientation
-#     branch below only helps when the crop itself still contains the right
-#     content just rotated in place (e.g. a photographed header rotated at
-#     the point of capture, or embedded-orientation image metadata) - see
-#     test_preprocessing.py for what this does and doesn't fix.
+#     text-vs-background separation across the page (tuned for the red BABA TRAVELS
+#     watermark), not general watermark segmentation - there's no dedicated
+#     segmentation model, that would be solving a problem this pipeline mostly doesn't have.
+#   - Gross full-page rotation (90/180/270) is only *partially* recoverable here: the
+#     orientation branch below only helps when the page still contains the right
+#     content just rotated in place (e.g. a photographed receipt rotated at the point
+#     of capture, or embedded-orientation image metadata) - see test_preprocessing.py
+#     for what this does and doesn't fix.
 #
 # ponytail: 180-degree rotation is a known false negative of the
 # misorientation heuristic below (row/column ink-variance stays
@@ -193,6 +202,12 @@ _ORIENTATION_VARIANCE_RATIO = 1.8
 # suppression. A clean header crop is close to bimodal (near-white
 # background, near-black text), so a high mid-gray fraction is unusual.
 _WATERMARK_MIDTONE_FRACTION = 0.05
+_WHITE_PAPER_MEDIAN = 200
+# A pixel counts as "red" when R exceeds max(G,B) by this much; a page with more than
+# _RED_PIXEL_FRACTION of them is a red-ink/red-watermark receipt (Baba). Pawan (blue) and
+# gray scans stay near 0, so they never take the red branch.
+_RED_DOMINANCE = 30
+_RED_PIXEL_FRACTION = 0.04
 # Median ink-blob height as a fraction of crop height above this = unusually
 # large glyphs (not just bold - genuinely oversized), worth bumping the
 # detector's input-size cap. Calibrated empirically (see
@@ -332,6 +347,19 @@ def _suppress_watermark_noise(gray: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
 
 
+def _is_red_ink_page(img: np.ndarray) -> bool:
+    # Baba-style receipts: red header band + red/pink repeated "BABA TRAVELS" watermark.
+    b, g, r = (img[..., i].astype(np.int16) for i in range(3))
+    return float(((r - np.maximum(g, b)) > _RED_DOMINANCE).mean()) > _RED_PIXEL_FRACTION
+
+
+def _min_channel_gray(img: np.ndarray) -> np.ndarray:
+    # min(B,G,R) is darkest for red ink AND black ink, but only mid-gray for the pale
+    # pink watermark (its G/B stay high), so ink-vs-watermark contrast rises without
+    # destroying strokes the way a hard adaptive threshold did (see ocr spot-check notes).
+    return cv2.cvtColor(img.min(axis=2), cv2.COLOR_GRAY2BGR)
+
+
 def _likely_misoriented(gray: np.ndarray) -> bool:
     # Header crops are short, wide strips of horizontal text lines, so
     # ink-density variance across ROWS (line vs. gap) should dominate over
@@ -381,6 +409,8 @@ def assess_and_preprocess(image_bytes: bytes) -> tuple[bytes, list[str]]:
         steps.append("sharpen_blur")
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
+    red_page = _is_red_ink_page(img)  # judged on the original colors, before any gray-out
+
     img, angle = _deskew(img, gray)
     if abs(angle) >= _MIN_DESKEW_ANGLE_DEG:
         steps.append(f"deskew:{angle:.1f}deg")
@@ -396,12 +426,22 @@ def assess_and_preprocess(image_bytes: bytes) -> tuple[bytes, list[str]]:
         steps.append("illumination_normalize")
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    if _midtone_fraction(gray) > _WATERMARK_MIDTONE_FRACTION:
+    if red_page:
+        # Same-hue watermark: a hard adaptive threshold ate real fields (Receipt No,
+        # Delivery At) in testing; min-channel gray alone kept them legible.
+        img = _min_channel_gray(img)
+        steps.append("red_watermark_min_channel")
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    elif float(np.median(gray)) > _WHITE_PAPER_MEDIAN and (
+        _midtone_fraction(gray) > _WATERMARK_MIDTONE_FRACTION
+    ):
+        # Only on near-white paper: a dim phone photo is ~97% "midtone" with no watermark
+        # at all, and thresholding it wrecked clean Pawan receipts.
         img = _suppress_watermark_noise(gray)
         steps.append("adaptive_watermark_suppress")
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    if _foreground_background_contrast(gray) < _LOW_CONTRAST_DELTA_THRESHOLD:
+    if not red_page and _foreground_background_contrast(gray) < _LOW_CONTRAST_DELTA_THRESHOLD:
         img = _clahe(img)
         steps.append("clahe_contrast")
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
