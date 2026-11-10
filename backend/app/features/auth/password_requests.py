@@ -22,7 +22,7 @@ def sanitize_note(note: str | None) -> str:
 
 
 def can_request_reset(user: dict | None) -> bool:
-    """Approved, non-admin, has a real password (so not Google-only). Missing status = approved."""
+    """Approved, non-admin, has a real password. Missing status = approved."""
     return bool(
         user
         and user.get("role") != "admin"

@@ -11,10 +11,8 @@ from app.core.security import decode_token
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 
-STATUS_PENDING = "pending"
+# The one user status: every account is active from signup.
 STATUS_APPROVED = "approved"
-PENDING_MESSAGE = "Waiting for admin approval."
-REJECTED_MESSAGE = "Your request was not approved. Contact the admin."
 
 
 def iso_utc(value: Any) -> str | None:
@@ -25,31 +23,6 @@ def iso_utc(value: Any) -> str | None:
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
-
-
-def raise_if_not_approved(user: dict) -> None:
-    """403 for a pending or rejected/revoked account. The detail is structured so the login
-    page can say WHEN and WHY; `message` keeps the old text. Only ever call this AFTER the
-    password was verified - it reveals the reason."""
-    user_status = user.get("status", STATUS_APPROVED)
-    if user_status == STATUS_APPROVED:
-        return
-    if user_status == STATUS_PENDING:
-        code, message = "ACCOUNT_PENDING", PENDING_MESSAGE
-    else:
-        code = "ACCOUNT_REVOKED" if user.get("decision") == "revoked" else "ACCOUNT_REJECTED"
-        message = REJECTED_MESSAGE
-    reason = user.get("decisionReason")
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail={
-            "code": code,
-            "message": message,
-            "requestedAt": iso_utc(user.get("createdAt")),
-            "decidedAt": iso_utc(user.get("decidedAt")),
-            "reason": reason if isinstance(reason, str) else None,
-        },
-    )
 
 
 class CurrentUser:
@@ -95,22 +68,11 @@ async def _authenticate(credentials: HTTPAuthorizationCredentials | None) -> Cur
         {
             "tokenVersion": 1,
             "role": 1,
-            "status": 1,
-            "decision": 1,
-            "decidedAt": 1,
-            "decisionReason": 1,
-            "createdAt": 1,
             "mustChangePassword": 1,
         },
     )
     if user is None or user.get("tokenVersion") != payload.get("tokenVersion"):
         raise unauthorized
-
-    # Single enforcement point for the admin-approval gate: every protected
-    # route depends on this function, so a pending/rejected account is locked
-    # out everywhere, including with an old token. A missing status field
-    # means a pre-approval-era account, which stays approved.
-    raise_if_not_approved(user)
 
     return CurrentUser(
         id=user_id, role=user["role"], must_change_password=user.get("mustChangePassword") is True

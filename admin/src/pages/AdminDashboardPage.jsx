@@ -1,12 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import api from '../utils/api'
 import { useAdminAuth } from '../context/AdminAuthContext'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
-import { notifyCountsChanged } from '../utils/events'
 import { describeActivity, relativeTime } from '../utils/activity'
 import { PALETTE } from '../utils/palette'
-import Banner from '../components/Banner'
 import { AreaChart, Donut, Gauge } from '../components/charts'
 import { Avatar, Badge, Card, ChartCard, EmptyState, ErrorState, PageHeader, Skeleton, StatCard, Trend } from '../components/ui'
 
@@ -50,7 +48,7 @@ function ActivityCard({ feed }) {
   return (
     <ChartCard title="Recent activity" className="h-full" action={<Link to="/logs" className="text-[14px] font-semibold text-[var(--violet-2)] no-underline hover:underline">View all</Link>}>
       {feed.length === 0 ? (
-        <EmptyState title="Nothing has happened yet" hint="New sign-ins, approvals and uploads will show up here." />
+        <EmptyState title="Nothing has happened yet" hint="New sign-ins and uploads will show up here." />
       ) : (
         <ul className="divide-y divide-white/5">
           {feed.map((item) => {
@@ -73,35 +71,6 @@ function ActivityCard({ feed }) {
   )
 }
 
-function PendingCard({ pending, onApprove, busyId }) {
-  const list = pending.oldest || []
-  return (
-    <ChartCard
-      title={pending.count > 0 ? `Pending approvals (${pending.count})` : 'Pending approvals'}
-      action={<Link to="/approvals" className="text-[14px] font-semibold text-[var(--violet-2)] no-underline hover:underline">Review</Link>}
-    >
-      {list.length === 0 ? (
-        <EmptyState title="No pending requests" hint="New account requests will appear here." />
-      ) : (
-        <ul className="divide-y divide-white/5">
-          {list.map((u) => (
-            <li key={u.id} className="flex items-center gap-3 py-3">
-              <Avatar id={u.id} name={u.username} size={36} />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-[14px] font-semibold text-white" title={u.username}>{u.username}</p>
-                <p className="truncate text-[13px] text-[var(--muted)]" title={u.email}>{u.email} · {relativeTime(u.createdAt) || 'recently'}</p>
-              </div>
-              <button type="button" className="btn btn-success btn-sm shrink-0" disabled={busyId === u.id} onClick={() => onApprove(u)} aria-label={`Approve ${u.username}`}>
-                {busyId === u.id ? 'Approving...' : 'Approve'}
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </ChartCard>
-  )
-}
-
 function QuickAction({ to, icon, title, hint }) {
   return (
     <Link to={to} className="ui-card ui-card-flat flex items-center gap-4 p-4 no-underline transition-transform hover:-translate-y-0.5">
@@ -115,7 +84,7 @@ function QuickAction({ to, icon, title, hint }) {
   )
 }
 
-function Dashboard({ data, onApprove, busyId }) {
+function Dashboard({ data }) {
   const byStatus = data.documentsByStatus
   const byType = data.documentsByType
   const series = data.series
@@ -123,7 +92,6 @@ function Dashboard({ data, onApprove, busyId }) {
   const failed = byStatus?.failed
   const finished = isNum(processed) && isNum(failed) ? processed + failed : 0
   const successRate = finished > 0 ? Math.round((processed / finished) * 1000) / 10 : null
-  const pending = data.pendingUsers
   const proc = data.processedDocuments
   const feed = Array.isArray(data.activityFeed) ? data.activityFeed : []
 
@@ -141,10 +109,6 @@ function Dashboard({ data, onApprove, busyId }) {
           <StatCard label="Total users" value={fmt(data.totalUsers)} tone="violet" icon={<Icon d={ICONS.users} />} to="/users"
             trend={data.trends?.users && <Trend current={data.trends.users.current} previous={data.trends.users.previous} suffix="vs previous 7 days" />}
             sparkline={lastN(series?.users, 14)} />
-        )}
-        {isNum(pending?.count) && (
-          <StatCard label="Pending approvals" value={fmt(pending.count)} tone="blue" icon={<Icon d={ICONS.check} />} to="/approvals"
-            trend={pending.count > 0 ? 'Waiting for review' : 'All caught up'} />
         )}
         {isNum(processed) && (
           <StatCard label="Documents processed" value={fmt(processed)} tone="teal" icon={<Icon d={ICONS.doc} />} to="/documents"
@@ -206,9 +170,7 @@ function Dashboard({ data, onApprove, busyId }) {
       <section aria-label="Activity and shortcuts" className="grid grid-cols-1 gap-4 @min-[760px]:grid-cols-2">
         {Array.isArray(data.activityFeed) && <ActivityCard feed={feed} />}
         <div className="flex flex-col gap-4">
-          {pending && <PendingCard pending={pending} onApprove={onApprove} busyId={busyId} />}
           <nav aria-label="Quick actions" className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <QuickAction to="/approvals" icon={ICONS.check} title="Approvals" hint={isNum(pending?.count) && pending.count > 0 ? `${pending.count} pending` : 'Review pending requests'} />
             <QuickAction to="/users" icon={ICONS.users} title="Users" hint="Manage user access" />
             <QuickAction to="/documents" icon={ICONS.doc} title="Documents" hint="Browse documents" />
             <QuickAction to="/maintenance" icon={ICONS.wrench} title="Maintenance" hint="Storage and cleanup" />
@@ -236,14 +198,11 @@ export default function AdminDashboardPage() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
-  const [notice, setNotice] = useState({ error: '', success: '' })
-  const [busyId, setBusyId] = useState(null)
-  const approving = useRef(new Set()) // synchronous guard: a double click is ignored, not re-sent
 
-  const { markChanged, noteLoad } = useAutoRefresh({
+  const { noteLoad } = useAutoRefresh({
     fetchData: () => api.get('/admin/telemetry').then((res) => res.data),
     applyData: (d) => { setData(d); setLoadError('') },
-    busy: loading || busyId !== null,
+    busy: loading,
     minIntervalMs: 55000, // beats are 15 s apart: 55 s keeps the period at 60 s despite timer drift
   })
 
@@ -261,25 +220,6 @@ export default function AdminDashboardPage() {
     load()
   }, [load])
 
-  async function approve(u) {
-    if (approving.current.has(u.id)) return
-    approving.current.add(u.id)
-    markChanged()
-    setBusyId(u.id)
-    setNotice({ error: '', success: '' })
-    try {
-      await api.post(`/admin/users/${u.id}/approve`)
-      setNotice({ error: '', success: `${u.username} approved.` })
-    } catch (err) {
-      setNotice({ error: err.userMessage || 'Could not approve this user.', success: '' })
-    } finally {
-      approving.current.delete(u.id)
-      setBusyId(null)
-      await load()
-      notifyCountsChanged()
-    }
-  }
-
   const chips = []
   if (data?.failedDocuments > 0) chips.push(<Link key="f" to="/documents" className="no-underline"><Badge tone="red" dot>{fmt(data.failedDocuments)} failed {data.failedDocuments === 1 ? 'document' : 'documents'}</Badge></Link>)
   if (data?.orphanedFiles > 0) chips.push(<Link key="o" to="/orphaned-files" className="no-underline"><Badge tone="amber" dot>{fmt(data.orphanedFiles)} orphaned {data.orphanedFiles === 1 ? 'file' : 'files'}</Badge></Link>)
@@ -291,8 +231,7 @@ export default function AdminDashboardPage() {
         subtitle="Here is what is happening with Transport today"
         actions={chips.length > 0 ? chips : null}
       />
-      <Banner error={notice.error} success={notice.success} />
-      {loading ? <LoadingSkeleton /> : data ? <Dashboard data={data} onApprove={approve} busyId={busyId} /> : (
+      {loading ? <LoadingSkeleton /> : data ? <Dashboard data={data} /> : (
         <Card><ErrorState message={loadError || 'Could not load the dashboard.'} onRetry={retry} /></Card>
       )}
     </div>

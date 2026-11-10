@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from bson import ObjectId
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.errors import DuplicateKeyError
 
@@ -29,7 +29,6 @@ from app.features.admin.schemas import (
     AdminChangeEmailRequest,
     AdminMonthsRequest,
     AdminUpdateUserRequest,
-    RejectRequest,
 )
 from app.features.auth.dependencies import CurrentUser, require_admin
 from app.features.auth.schemas import TempPasswordRequest
@@ -81,13 +80,8 @@ def _serialize_user(user: dict) -> dict:
         "role": user["role"],
         "status": user.get("status", "approved"),
         "tokenVersion": user["tokenVersion"],
-        "authProvider": user.get("authProvider", "local"),
         "createdAt": user.get("createdAt"),
         "updatedAt": user.get("updatedAt"),
-        # Approval decision details - this serializer is admin-only (never used for /me or login).
-        "decision": user.get("decision"),
-        "decidedAt": user.get("decidedAt"),
-        "decisionReason": user.get("decisionReason"),
     }
 
 
@@ -131,7 +125,6 @@ async def _document_counts(db: AsyncIOMotorDatabase, user_ids: list[ObjectId]) -
 async def list_users(
     page: int | None = Query(default=None),
     limit: int | None = Query(default=None),
-    status: Literal["pending", "approved", "rejected"] | None = Query(default=None),
     q: str | None = Query(default=None, max_length=100),
     role: Literal["user", "admin"] | None = Query(default=None),
     current_user: CurrentUser = Depends(require_admin),
@@ -139,8 +132,6 @@ async def list_users(
     db = get_database()
     lim, pg, skip = _pagination(page, limit)
     clauses: list[dict] = []
-    if status:
-        clauses.append(_status_query(status))
     if role:
         clauses.append({"role": role})
     if q:
@@ -148,13 +139,9 @@ async def list_users(
         clauses.append({"$or": [{"username": rx}, {"email": rx}]})
     query = {"$and": clauses} if clauses else {}
     cursor = db.users.find(query, {"passwordHash": 0}).sort("createdAt", -1).skip(skip).limit(lim)
-    raw, total_users, all_users, approved, pending, rejected = await asyncio.gather(
+    raw, total_users = await asyncio.gather(
         cursor.to_list(length=None),
         db.users.count_documents(query),
-        db.users.count_documents({}),
-        db.users.count_documents(_status_query("approved")),
-        db.users.count_documents(_status_query("pending")),
-        db.users.count_documents(_status_query("rejected")),
     )
     counts = await _document_counts(db, [u["_id"] for u in raw])
     password_request_count = await db.passwordresetrequests.count_documents({"status": "open"})
@@ -164,109 +151,17 @@ async def list_users(
         "totalUsers": total_users,
         "totalPages": max(1, -(-total_users // lim)),
         "currentPage": pg,
-        # Drives the badge on the admin panel's Pending tab.
-        "pendingCount": pending,
         # Open password-reset requests (badge on the Password requests tab).
         "passwordRequestCount": password_request_count,
-        # Whole-collection tallies, unaffected by q/role/status.
-        "statusCounts": {
-            "total": all_users,
-            "approved": approved,
-            "pending": pending,
-            "rejected": rejected,
-        },
     }
 
 
-def _status_query(status: str) -> dict:
-    # A user document with no status field is a pre-approval-era account and
-    # counts as approved everywhere.
-    if status == "approved":
-        return {"$or": [{"status": "approved"}, {"status": {"$exists": False}}]}
-    return {"status": status}
-
-
 def _guard_other_admin(user: dict, current_user: CurrentUser) -> None:
-    """One admin may never change (edit, demote, reject, delete, purge) ANOTHER admin - only that
+    """One admin may never change (edit, demote, delete, purge) ANOTHER admin - only that
     admin can touch their own account. Call right after loading the target and BEFORE any write
     or file deletion; every endpoint that acts on a user by id goes through here."""
     if user.get("role") == "admin" and user["_id"] != current_user.id:
         raise HTTPException(status_code=403, detail=ADMIN_ONLY_SELF_MSG)
-
-
-async def _set_user_status(
-    user_id: ObjectId, new_status: str, admin: CurrentUser, reason: str | None = None
-) -> dict:
-    db = get_database()
-    user = await db.users.find_one({"_id": user_id})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found.")
-    _guard_other_admin(user, admin)
-
-    now = datetime.now(UTC)
-    previous = user.get("status", "approved")
-    update: dict = {"$set": {"status": new_status, "updatedAt": now}}
-    decision = "approved"
-    if new_status == "approved":
-        # One-time "you're approved" notice for the user's next login - but only when this
-        # really is a change to approved (pending/rejected -> approved). Re-approving someone
-        # who is already approved, or a legacy account with no status (= approved), sets nothing.
-        if previous != "approved":
-            update["$set"]["approvalNoticePending"] = True
-        update["$set"].update({"decision": "approved", "decidedAt": now, "decisionReason": None})
-    if new_status == "rejected":
-        update["$set"]["approvalNoticePending"] = False
-        # Admins (including yourself) can never be locked out this way.
-        if user.get("role") == "admin":
-            raise HTTPException(status_code=400, detail="Admin accounts cannot be rejected.")
-        if user_id == admin.id:
-            raise HTTPException(status_code=400, detail="You cannot reject your own account.")
-        # Bumping tokenVersion kills every token already issued to this user.
-        update["$inc"] = {"tokenVersion": 1}
-        # Rejecting someone who was already approved is a revoke; repeating a reject keeps
-        # whatever the first one was.
-        decision = (
-            "revoked"
-            if previous == "approved"
-            or (previous == "rejected" and user.get("decision") == "revoked")
-            else "rejected"
-        )
-        update["$set"].update({"decision": decision, "decidedAt": now, "decisionReason": reason})
-    await db.users.update_one({"_id": user_id}, update)
-    await log_action(
-        admin.id,
-        "user_approved" if new_status == "approved" else "user_rejected",
-        {
-            "targetUserId": str(user_id),
-            "targetEmail": user["email"],
-            "previous": previous,
-            **({"decision": decision, "reason": reason} if new_status == "rejected" else {}),
-        },
-    )
-    refreshed = await db.users.find_one({"_id": user_id}, {"passwordHash": 0})
-    assert refreshed is not None
-    return {"user": _serialize_user(refreshed)}
-
-
-@router.post("/users/{user_id}/approve")
-async def approve_user(
-    user_id: PyObjectId, current_user: CurrentUser = Depends(require_admin)
-) -> dict:
-    return await _set_user_status(user_id, "approved", current_user)
-
-
-@router.post("/users/{user_id}/reject")
-async def reject_user(
-    user_id: PyObjectId,
-    body: RejectRequest | None = Body(default=None),
-    current_user: CurrentUser = Depends(require_admin),
-) -> dict:
-    """Reject a pending request OR revoke an approved user - same action, the
-    account is locked out and every issued token dies (tokenVersion bump). The optional
-    reason is shown to the user on their next login attempt."""
-    return await _set_user_status(
-        user_id, "rejected", current_user, body.reason if body is not None else None
-    )
 
 
 @router.get("/users/{user_id}")
@@ -295,13 +190,6 @@ async def _validated_new_email(db: AsyncIOMotorDatabase, user: dict, raw: str) -
         raise HTTPException(status_code=400, detail=err)
     if email == user["email"]:
         return None
-    # Google sign-in finds the account by email, so changing it would orphan the account and the
-    # user's next Google sign-in would create a NEW pending one.
-    if "google" in user.get("authProvider", "local"):
-        raise HTTPException(
-            status_code=400,
-            detail="This user signs in with Google, so the email cannot be changed.",
-        )
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="That email is already in use.")
     return email
@@ -566,7 +454,7 @@ async def set_temp_password(
     # 2) update the user, only if still an approved non-admin
     try:
         result = await db.users.update_one(
-            {"_id": req["userId"], "role": {"$ne": "admin"}, **_status_query("approved")},
+            {"_id": req["userId"], "role": {"$ne": "admin"}},
             {
                 "$set": {"passwordHash": new_hash, "mustChangePassword": True, "updatedAt": now},
                 "$inc": {"tokenVersion": 1},
@@ -1276,21 +1164,6 @@ async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
         )
         return {"current": cur, "previous": prev}
 
-    async def pending_oldest_users() -> list[dict]:
-        return [
-            {
-                "id": str(u["_id"]),
-                "username": u["username"],
-                "email": u["email"],
-                "createdAt": u.get("createdAt"),
-            }
-            async for u in db.users.find(
-                _status_query("pending"), {"username": 1, "email": 1, "createdAt": 1}
-            )
-            .sort("createdAt", 1)
-            .limit(5)
-        ]
-
     async def recent_events(query: dict, n: int) -> tuple[list[dict], dict]:
         """Newest-first audit events + their authors' usernames (one extra query)."""
         events = await db.auditlogs.find(query).sort("createdAt", -1).limit(n).to_list(n)
@@ -1311,8 +1184,6 @@ async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
         total_documents,
         activity_24h,
         activity_7d,
-        pending_count,
-        pending_oldest,
         (events, names),
         (maintenance, maint_names),
         orphaned,
@@ -1335,8 +1206,6 @@ async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
         db.documents.count_documents(live),
         db.auditlogs.count_documents({"createdAt": {"$gte": day_ago}}),
         db.auditlogs.count_documents({"createdAt": {"$gte": week_ago}}),
-        db.users.count_documents(_status_query("pending")),
-        pending_oldest_users(),
         # "admin_access" (an admin opened another user's data) is audit noise, not dashboard news.
         recent_events({"action": {"$ne": "admin_access"}}, FEED_FETCH),
         recent_events({"action": {"$in": MAINTENANCE_ACTIONS}}, 5),
@@ -1379,7 +1248,6 @@ async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
         "documentsByType": by_type,
         "ocrFailureRate": ocr_failure_rate,
         "recentActivity": {"last24h": activity_24h, "last7d": activity_7d},
-        "pendingUsers": {"count": pending_count, "oldest": pending_oldest},
         "passwordRequests": {"count": password_requests_open},
         "orphanedFiles": orphaned,
         "failedDocuments": n_failed,

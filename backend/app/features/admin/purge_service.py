@@ -48,7 +48,7 @@ async def verify_delete_confirmation(
         await log_action(current_user.id, blocked_action, {"reason": "no_password"})
         raise HTTPException(
             status_code=400,
-            detail="This account uses Google Sign-In - there's no password to confirm with.",
+            detail="This account has no password to confirm with.",
         )
     if not verify_password(body.password, user["passwordHash"]):
         await log_action(current_user.id, blocked_action, {"reason": "wrong_password"})

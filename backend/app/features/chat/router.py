@@ -295,7 +295,7 @@ async def clear_all(
         await safe_log_action(current_user.id, "chat_clear_blocked", {"reason": "no_password"})
         raise HTTPException(
             status_code=400,
-            detail="This account uses Google Sign-In - there's no password to confirm with.",
+            detail="This account has no password to confirm with.",
         )
     password = body.password
     ok = isinstance(password, str) and await asyncio.to_thread(

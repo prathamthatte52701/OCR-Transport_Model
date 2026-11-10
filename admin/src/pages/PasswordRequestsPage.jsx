@@ -103,7 +103,6 @@ function TempPasswordModal({ request, onClose, onDone, onWrite }) {
 export default function PasswordRequestsPage() {
   const [requests, setRequests] = useState([])
   const [openCount, setOpenCount] = useState(0)
-  const [pendingCount, setPendingCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [showAll, setShowAll] = useState(false)
@@ -115,16 +114,12 @@ export default function PasswordRequestsPage() {
 
   const { markChanged, noteLoad } = useAutoRefresh({
     fetchData: async () => {
-      const [reqs, users] = await Promise.all([
-        api.get('/admin/password-requests', { params: { status: showAll ? 'all' : 'open' } }),
-        api.get('/admin/users', { params: { limit: 1, status: 'pending' } }),
-      ])
-      return { requests: reqs.data.requests || [], openCount: reqs.data.openCount || 0, pendingCount: users.data.pendingCount || 0 }
+      const reqs = await api.get('/admin/password-requests', { params: { status: showAll ? 'all' : 'open' } })
+      return { requests: reqs.data.requests || [], openCount: reqs.data.openCount || 0 }
     },
     applyData: (d) => {
       setRequests((prev) => (sameRows(prev, d.requests, REQUEST_KEYS) ? prev : d.requests))
       setOpenCount(d.openCount)
-      setPendingCount(d.pendingCount)
       setLoadError('')
     },
     busy: loading || busy,
@@ -152,11 +147,6 @@ export default function PasswordRequestsPage() {
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- initial fetch
   useEffect(() => { load() }, [load])
-  useEffect(() => {
-    api.get('/admin/users', { params: { limit: 1, status: 'pending' } })
-      .then((res) => setPendingCount(res.data.pendingCount || 0))
-      .catch(() => {})
-  }, [])
 
   function afterChange(message) {
     setSetting(null)
@@ -188,7 +178,7 @@ export default function PasswordRequestsPage() {
     <main className="mx-auto max-w-[1560px] px-4 py-6 sm:px-6 lg:px-8">
       <BackButton fallback="/" />
       <PageHeader title="Password requests" subtitle="Users who asked for a password reset" />
-      <UsersTabs active="requests" pending={pendingCount} requests={openCount} />
+      <UsersTabs active="requests" requests={openCount} />
       <Banner error={error} success={success} />
 
       <Card className="min-w-0 p-5" aria-label="Password requests">

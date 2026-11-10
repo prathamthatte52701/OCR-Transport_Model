@@ -11,7 +11,6 @@ from app.core.validators import validate_email
 MAX_USERNAME = 64
 MAX_EMAIL = 254
 MAX_PASSWORD = 128
-MAX_ID_TOKEN = 4096
 MAX_NOTE = 200
 
 Username = Field(max_length=MAX_USERNAME)
@@ -28,10 +27,6 @@ class SignupRequest(CamelModel):
 class LoginRequest(CamelModel):
     email: str = Email
     password: str = Password
-
-
-class GoogleLoginRequest(CamelModel):
-    id_token: str = Field(max_length=MAX_ID_TOKEN)
 
 
 class UpdateProfileRequest(CamelModel):
@@ -74,11 +69,6 @@ class UserOut(CamelModel):
 class TokenResponse(CamelModel):
     token: str
     user: UserOut
-    # True exactly once: on the first password login after an admin approved the account.
-    just_approved: bool = False
-    # When the admin approved the account (ISO UTC) - only set for an account that went
-    # through the approval step, otherwise None.
-    approved_at: str | None = None
 
 
 class MessageResponse(CamelModel):

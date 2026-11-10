@@ -13,19 +13,14 @@ export function useAuth() {
 
   async function login(email, password) {
     const data = await authApi.login(email, password)
-    setSession(data.token, data.user, Boolean(data.justApproved), data.approvedAt || null)
-    return data.user
-  }
-
-  async function loginWithGoogle(idToken) {
-    const data = await authApi.loginWithGoogle(idToken)
-    setSession(data.token, data.user, Boolean(data.justApproved), data.approvedAt || null)
+    setSession(data.token, data.user)
     return data.user
   }
 
   async function signup(username, email, password) {
     const data = await authApi.signup(username, email, password)
-    return data.message
+    setSession(data.token, data.user)
+    return data.user
   }
 
   function logout() {
@@ -44,5 +39,5 @@ export function useAuth() {
     return data.user
   }
 
-  return { user, loading, login, loginWithGoogle, signup, logout, updateProfile, changePassword }
+  return { user, loading, login, signup, logout, updateProfile, changePassword }
 }

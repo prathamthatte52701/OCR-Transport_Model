@@ -3,9 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { validateUsername, validateEmail, validatePassword } from '../utils/validators'
 import PasswordInput from '../components/PasswordInput'
-import GoogleSignInButton from '../components/GoogleSignInButton'
 import BackButton from '../components/BackButton'
-import { codeFromDetail } from '../utils/noticeCodes'
 
 export default function SignupPage() {
   const { signup } = useAuth()
@@ -27,22 +25,11 @@ export default function SignupPage() {
     setSubmitting(true)
     try {
       await signup(username, email.trim().toLowerCase(), password)
-      navigate('/login', { replace: true, state: { success: 'Request sent. You will NOT get an email. Log in later to check the status.' } })
+      navigate('/', { replace: true })
     } catch (err) {
       setError(err.userMessage || 'Could not create your account. Please try again.')
     } finally {
       setSubmitting(false)
-    }
-  }
-
-  // Pending / rejected / revoked Google attempt: show the same card the login page shows.
-  function handleGoogleError(err) {
-    const detail = err.response?.data?.detail
-    const code = err.response?.status === 403 ? codeFromDetail(detail) : null
-    if (code) {
-      navigate(`/login?notice=${code}`, { replace: true })
-    } else {
-      setError(err.userMessage || 'Could not sign in with Google. Please try again.')
     }
   }
 
@@ -109,13 +96,6 @@ export default function SignupPage() {
             {submitting ? 'Creating account...' : 'Sign up'}
           </button>
         </form>
-
-        <div className="my-5 flex items-center gap-3 text-[11.6px] font-semibold uppercase tracking-wide text-slate-600">
-          <span className="h-px flex-1 bg-white/10" />
-          or
-          <span className="h-px flex-1 bg-white/10" />
-        </div>
-        <GoogleSignInButton onError={handleGoogleError} />
 
         <p className="mt-5 text-center text-[13.6px] text-slate-500">
           Already have an account? <Link to="/login" className="font-semibold text-blue-300 no-underline hover:text-blue-200">Log in</Link>

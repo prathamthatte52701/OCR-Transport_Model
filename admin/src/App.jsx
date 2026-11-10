@@ -14,7 +14,6 @@ import AdminDocumentsPage from './pages/AdminDocumentsPage'
 import AdminLogsPage from './pages/AdminLogsPage'
 import AdminOrphanedFilesPage from './pages/AdminOrphanedFilesPage'
 import AdminMaintenancePage from './pages/AdminMaintenancePage'
-import AdminApprovalsPage from './pages/AdminApprovalsPage'
 import PasswordRequestsPage from './pages/PasswordRequestsPage'
 
 function FadeIn({ children }) {
@@ -43,7 +42,6 @@ function AppRoutes() {
           <Route element={<AdminLayout />}>
             <Route path="/" element={<FadeIn><AdminDashboardPage /></FadeIn>} />
             <Route path="/users" element={<FadeIn><AdminUsersPage /></FadeIn>} />
-            <Route path="/approvals" element={<FadeIn><AdminApprovalsPage /></FadeIn>} />
             <Route path="/password-requests" element={<FadeIn><PasswordRequestsPage /></FadeIn>} />
             <Route path="/users/:id" element={<FadeIn><AdminUserDetailPage /></FadeIn>} />
             <Route path="/documents" element={<FadeIn><AdminDocumentsPage /></FadeIn>} />

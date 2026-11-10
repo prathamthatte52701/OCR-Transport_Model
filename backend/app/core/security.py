@@ -19,7 +19,7 @@ def hash_password(password: str) -> str:
 
 # A real bcrypt hash of a random throwaway value, computed once at import. Login
 # verifies against it when the email is unknown (or the account has no password,
-# e.g. Google-created), so "no such account" costs the same bcrypt time as "wrong
+# e.g. none set), so "no such account" costs the same bcrypt time as "wrong
 # password" and response time cannot be used to find registered emails.
 DUMMY_PASSWORD_HASH = bcrypt.hashpw(
     secrets.token_bytes(24), bcrypt.gensalt(rounds=SALT_ROUNDS)

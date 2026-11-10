@@ -44,7 +44,6 @@ class Settings(BaseSettings):
     # Swagger/ReDoc/openapi.json hand over a full map of the API, so they are OFF
     # unless explicitly enabled (ENABLE_DOCS=true), in every environment.
     enable_docs: bool = Field(default=False, alias="ENABLE_DOCS")
-    google_client_id: str = Field(default="", alias="GOOGLE_CLIENT_ID")
     # Audit entries older than this many days are deleted by MongoDB (TTL index). 0 = keep forever.
     audit_log_retention_days: int = Field(
         default=DEFAULT_AUDIT_LOG_RETENTION_DAYS, alias="AUDIT_LOG_RETENTION_DAYS"

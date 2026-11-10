@@ -1,7 +1,6 @@
 import axios from 'axios'
 import { toast } from 'sonner'
 import { useAuthStore } from '../store/authStore'
-import { codeFromDetail } from '../utils/noticeCodes'
 
 // Backend serializes camelCase on the wire (Phase 1 CamelModel alias_generator,
 // plus raw Mongo dicts that already store camelCase keys) - the same shape the
@@ -106,22 +105,6 @@ api.interceptors.response.use(
       }
     }
 
-    // Account not (or no longer) approved: the token is useless, so drop it and
-    // show the server's message on the login page. 403s on /auth/ routes are the
-    // login form's own job (it renders them), and other 403s are ordinary denials.
-    const detail = err.response?.data?.detail
-    if (
-      err.response?.status === 403 &&
-      !isAuthRoute &&
-      typeof detail?.code === 'string' &&
-      detail.code.startsWith('ACCOUNT_')
-    ) {
-      useAuthStore.getState().clear()
-      const noticeCode = codeFromDetail(detail)
-      if (!window.location.pathname.startsWith('/login')) {
-        window.location.replace(noticeCode ? `/login?notice=${noticeCode}` : '/login')
-      }
-    }
 
     // Admin set a temporary password while this session was open: flag the user in the store
     // and RequireAuth redirects to /set-new-password. Setting the flag is idempotent, so a burst

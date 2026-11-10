@@ -25,7 +25,7 @@ function Row({ label, children }) {
 
 // Right-hand "Selected user" card. `user` is the list row (fresh after every reload);
 // `detail` is GET /admin/users/{id} (documentCount, lastActiveAt) or null while loading.
-export default function SelectedUserPanel({ user, detail, detailLoading, busy, onApprove, onReject }) {
+export default function SelectedUserPanel({ user, detail, detailLoading }) {
   if (!user) {
     return (
       <Card className="hidden p-5 @min-[1000px]:block" aria-label="Selected user">
@@ -57,22 +57,9 @@ export default function SelectedUserPanel({ user, detail, detailLoading, busy, o
       <dl>
         <Row label="Role">{cap(user.role)}</Row>
         {lastActive && <Row label="Last active">{formatIST(lastActive)}</Row>}
-        {user.decidedAt && <Row label="Decision">{cap(user.decision)} {formatISTDate(user.decidedAt)}</Row>}
-        {user.decisionReason && <Row label="Reason">{user.decisionReason}</Row>}
       </dl>
 
       <Link to={`/users/${user.id}`} className="btn btn-ghost btn-sm mt-4 w-full">View activity</Link>
-
-      {user.status === 'pending' && (
-        <div className="mt-5 border-t border-[var(--line-soft)] pt-5">
-          <h3 className="text-[16px] font-bold text-white">Review request</h3>
-          <p className="mt-1 text-[14px] text-[var(--muted)]">New account awaiting admin approval.</p>
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <button type="button" disabled={busy} onClick={() => onApprove(user)} className="btn btn-success">Approve user</button>
-            <button type="button" disabled={busy} onClick={() => onReject(user)} className="btn btn-danger">Reject</button>
-          </div>
-        </div>
-      )}
     </Card>
   )
 }

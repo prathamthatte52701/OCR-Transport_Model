@@ -83,9 +83,6 @@ export default function SetNewPasswordPage() {
           </button>
         </form>
 
-        <p className="mt-5 text-center text-[13.6px] text-slate-500">
-          Signed in with Google? Use the temporary password the admin gave you.
-        </p>
         <button type="button" onClick={logout} className="mt-3 block w-full text-center text-[13.6px] font-semibold text-blue-300 hover:text-blue-200">
           Log out
         </button>

@@ -9,7 +9,6 @@ import AppLayout from './components/AppLayout'
 import ServerDownBanner from './components/ServerDownBanner'
 import GlobalConfirmDialog from './components/GlobalConfirmDialog'
 import GlobalPromptDialog from './components/GlobalPromptDialog'
-import ApprovedWelcomeDialog from './components/ApprovedWelcomeDialog'
 import ErrorBoundary from './components/ErrorBoundary'
 import LoginPage from './pages/LoginPage'
 import SignupPage from './pages/SignupPage'
@@ -37,7 +36,6 @@ export default function App() {
         <ServerDownBanner />
         <GlobalConfirmDialog />
         <GlobalPromptDialog />
-        <ApprovedWelcomeDialog />
         <Toaster theme="dark" position="top-right" richColors closeButton />
         <AuthGate>
           <ErrorBoundary>

@@ -1,15 +1,13 @@
 import { Link } from 'react-router-dom'
 
-// Tab strip shared by Users, Approvals and Password requests. Password requests is its own
-// tab with its own badge - never folded into Pending/Rejected.
+// Tab strip shared by Users and Password requests.
 const TABS = [
   { key: 'users', to: '/users', label: 'Users' },
-  { key: 'approvals', to: '/approvals', label: 'Approvals', badge: 'pending' },
   { key: 'requests', to: '/password-requests', label: 'Password requests', badge: 'requests' },
 ]
 
-export default function UsersTabs({ active, pending = 0, requests = 0 }) {
-  const counts = { pending, requests }
+export default function UsersTabs({ active, requests = 0 }) {
+  const counts = { requests }
   return (
     <nav aria-label="Users sections" className="mb-5 flex flex-wrap gap-2">
       {TABS.map((t) => {

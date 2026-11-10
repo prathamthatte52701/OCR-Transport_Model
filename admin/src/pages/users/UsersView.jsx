@@ -7,7 +7,6 @@ import { useAutoRefresh } from '../../hooks/useAutoRefresh'
 import PaginationControls from '../../components/PaginationControls'
 import Banner from '../../components/Banner'
 import ConfirmModal from '../../components/ConfirmModal'
-import RejectReasonModal from '../../components/RejectReasonModal'
 import BackButton from '../../components/BackButton'
 import { Avatar, Badge, Card, DataTable, EmptyState, ErrorState, PageHeader, StatCard } from '../../components/ui'
 import { formatISTDate } from '../../utils/formatDate'
@@ -22,14 +21,7 @@ import UsersTabs from './UsersTabs'
 
 const ADMIN_LOCK_TIP = 'Admins can only be changed by themselves.'
 const PAGE_SIZE = 30
-const STATUSES = ['approved', 'pending', 'rejected']
-const CHIPS = [
-  { key: '', label: 'All' },
-  { key: 'approved', label: 'Approved' },
-  { key: 'pending', label: 'Pending' },
-  { key: 'rejected', label: 'Rejected' },
-]
-const ROW_KEYS = ['status', 'role', 'username', 'email', 'updatedAt', 'decidedAt', 'documentCount']
+const ROW_KEYS = ['status', 'role', 'username', 'email', 'updatedAt', 'documentCount']
 const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : '')
 
 const icon = (d) => (
@@ -37,26 +29,18 @@ const icon = (d) => (
 )
 const ICONS = {
   total: icon(<><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14.5a6.5 6.5 0 0 1 3.5 5.5" /></>),
-  approved: icon(<><circle cx="12" cy="12" r="9" /><path d="m8 12.5 3 3 5-6" /></>),
-  pending: icon(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>),
-  rejected: icon(<><circle cx="12" cy="12" r="9" /><path d="m9 9 6 6m0-6-6 6" /></>),
 }
 
-// Shared by /users (all filters) and /approvals (status fixed to pending).
-export default function UsersView({ mode = 'users' }) {
-  const approvals = mode === 'approvals'
+export default function UsersView() {
   const { user: me } = useAdminAuth()
   const [searchParams, setSearchParams] = useSearchParams()
   const urlQ = searchParams.get('q') || ''
-  const rawStatus = searchParams.get('status') || ''
   const rawRole = searchParams.get('role') || ''
-  const status = approvals ? 'pending' : STATUSES.includes(rawStatus) ? rawStatus : ''
-  const role = !approvals && (rawRole === 'user' || rawRole === 'admin') ? rawRole : ''
+  const role = (rawRole === 'user' || rawRole === 'admin') ? rawRole : ''
 
   const [users, setUsers] = useState([])
   const [totalPages, setTotalPages] = useState(1)
   const [totalUsers, setTotalUsers] = useState(0)
-  const [pendingCount, setPendingCount] = useState(0)
   const [requestCount, setRequestCount] = useState(0)
   const [counts, setCounts] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -65,7 +49,6 @@ export default function UsersView({ mode = 'users' }) {
   const [success, setSuccess] = useState('')
   const [editingUser, setEditingUser] = useState(null)
   const [deletingUser, setDeletingUser] = useState(null)
-  const [rejectingUser, setRejectingUser] = useState(null)
   const [busyId, setBusyId] = useState(null)
   const [selectedId, setSelectedId] = useState(null)
   // Only the newest request may update the table (overlapping loads from fast filter changes).
@@ -102,22 +85,20 @@ export default function UsersView({ mode = 'users' }) {
   }, [qInput, updateParams])
 
   // Page resets to 1 whenever a filter changes (derived, no effect).
-  const filterKey = `${status}|${urlQ}|${role}`
+  const filterKey = `${urlQ}|${role}`
   const [pageState, setPageState] = useState({ key: filterKey, page: 1 })
   const page = pageState.key === filterKey ? pageState.page : 1
   const setPage = useCallback((p) => setPageState({ key: filterKey, page: p }), [filterKey])
 
   const listParams = useCallback((pageToLoad) => {
     const params = { page: pageToLoad, limit: PAGE_SIZE }
-    if (status) params.status = status
     if (urlQ) params.q = urlQ
     if (role) params.role = role
     return params
-  }, [status, urlQ, role])
+  }, [urlQ, role])
 
   const applyList = useCallback((data) => {
     setUsers((prev) => (sameRows(prev, data.users || [], ROW_KEYS) ? prev : data.users || []))
-    setPendingCount(data.pendingCount || 0)
     setRequestCount(data.passwordRequestCount || 0)
     if (data.statusCounts) setCounts(data.statusCounts)
     setTotalPages(data.totalPages || 1)
@@ -132,7 +113,7 @@ export default function UsersView({ mode = 'users' }) {
       else applyList(data)
     },
     busy: loading || Boolean(busyId),
-    modalOpen: Boolean(editingUser || deletingUser || rejectingUser),
+    modalOpen: Boolean(editingUser || deletingUser),
   })
 
   const load = useCallback(async (pageToLoad = page) => {
@@ -189,26 +170,6 @@ export default function UsersView({ mode = 'users' }) {
     }
   }
 
-  async function setStatus(user, action, reason = null) {
-    if (busyId) return // double-click safe
-    markChanged()
-    setBusyId(user.id)
-    setError('')
-    setSuccess('')
-    try {
-      await api.post(`/admin/users/${user.id}/${action}`, action === 'reject' ? { reason } : undefined)
-      setSuccess(`${user.username} ${action === 'approve' ? 'approved' : 'rejected'}.`)
-      setRejectingUser(null)
-      notifyCountsChanged()
-      load(page)
-    } catch (err) {
-      setError(err.userMessage || `Could not ${action} user.`)
-      setRejectingUser(null)
-    } finally {
-      setBusyId(null)
-    }
-  }
-
   async function deleteUser(user) {
     if (busyId) return
     markChanged()
@@ -231,7 +192,7 @@ export default function UsersView({ mode = 'users' }) {
   }
 
   const stat = (key) => (counts ? counts[key] : '-')
-  const hasFilters = Boolean(status || urlQ || role)
+  const hasFilters = Boolean(urlQ || role)
   const from = totalUsers === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
   const to = (page - 1) * PAGE_SIZE + users.length
   const firstLoad = loading && users.length === 0
@@ -243,18 +204,6 @@ export default function UsersView({ mode = 'users' }) {
     const tip = locked ? ADMIN_LOCK_TIP : undefined
     return (
       <div className="flex items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
-        {u.status === 'pending' && (
-          <>
-            <button type="button" disabled={busy} onClick={() => setStatus(u, 'approve')} className="btn btn-success btn-sm">Approve</button>
-            <button type="button" disabled={busy} onClick={() => setRejectingUser(u)} className="btn btn-danger btn-sm">Reject</button>
-          </>
-        )}
-        {u.status === 'rejected' && (
-          <button type="button" disabled={busy} onClick={() => setStatus(u, 'approve')} className="btn btn-success btn-sm">Re-approve</button>
-        )}
-        {u.status === 'approved' && u.role !== 'admin' && (
-          <button type="button" disabled={busy} onClick={() => setRejectingUser(u)} className="btn btn-ghost btn-sm !text-amber-300">Revoke</button>
-        )}
         <RowMenu
           label={`More actions for ${u.username}`}
           items={[
@@ -272,27 +221,22 @@ export default function UsersView({ mode = 'users' }) {
     <main className="mx-auto max-w-[1560px] px-4 py-6 sm:px-6 lg:px-8">
       <BackButton fallback="/" />
       <PageHeader
-        title={approvals ? 'Approvals' : 'Users'}
-        subtitle={approvals ? 'Review pending access requests' : 'Manage accounts and access permissions'}
+        title="Users"
+        subtitle="Manage accounts and access permissions"
       />
 
-      <UsersTabs active={approvals ? 'approvals' : 'users'} pending={pendingCount} requests={requestCount} />
+      <UsersTabs active="users" requests={requestCount} />
 
-      {!approvals && (
-        <div className="mb-6 grid grid-cols-2 gap-4 @min-[760px]:grid-cols-4">
+      <div className="mb-6 grid grid-cols-2 gap-4 @min-[760px]:grid-cols-4">
           <StatCard label="Total users" value={stat('total')} tone="violet" icon={ICONS.total} loading={!counts && loading} to="/users" />
-          <StatCard label="Approved" value={stat('approved')} tone="teal" icon={ICONS.approved} loading={!counts && loading} to="/users?status=approved" />
-          <StatCard label="Pending" value={stat('pending')} tone="amber" icon={ICONS.pending} loading={!counts && loading} to="/users?status=pending" />
-          <StatCard label="Rejected" value={stat('rejected')} tone="pink" icon={ICONS.rejected} loading={!counts && loading} to="/users?status=rejected" />
-        </div>
-      )}
+      </div>
 
       <Banner error={error} success={success} />
 
       <div className="grid items-start gap-6 @min-[1000px]:grid-cols-[minmax(0,1fr)_340px]">
-        <Card className="min-w-0 p-5" aria-label={approvals ? 'Pending requests' : 'User directory'}>
+        <Card className="min-w-0 p-5" aria-label="User directory">
           <div className="mb-4 flex items-baseline gap-3">
-            <h2 className="text-[20px] font-bold text-white">{approvals ? 'Pending requests' : 'User directory'}</h2>
+            <h2 className="text-[20px] font-bold text-white">User directory</h2>
             {!firstLoad && !loadError && <span className="text-[14px] text-[var(--muted)]">{totalUsers} user{totalUsers !== 1 ? 's' : ''}</span>}
           </div>
 
@@ -309,21 +253,6 @@ export default function UsersView({ mode = 'users' }) {
                 className="input pl-10"
               />
             </div>
-            {!approvals && (
-              <>
-                <div role="group" aria-label="Filter by status" className="flex flex-wrap gap-2">
-                  {CHIPS.map((c) => (
-                    <button
-                      key={c.key || 'all'}
-                      type="button"
-                      aria-pressed={status === c.key}
-                      onClick={() => { updateParams({ status: c.key }); setSuccess('') }}
-                      className={`rounded-full border px-4 py-1.5 text-[14px] font-semibold transition-colors ${status === c.key ? 'border-violet-300/60 bg-violet-500 text-white shadow-[0_0_18px_rgba(124,92,255,0.45)]' : 'border-[var(--line)] bg-white/5 text-[var(--muted)] hover:text-white'}`}
-                    >
-                      {c.label}
-                    </button>
-                  ))}
-                </div>
                 <select
                   value={role}
                   onChange={(e) => updateParams({ role: e.target.value })}
@@ -334,27 +263,14 @@ export default function UsersView({ mode = 'users' }) {
                   <option value="user">User</option>
                   <option value="admin">Admin</option>
                 </select>
-              </>
-            )}
           </div>
-
-          {!approvals && pendingCount > 0 && status !== 'pending' && (
-            <button
-              type="button"
-              onClick={() => updateParams({ status: 'pending' })}
-              className="mb-4 flex w-full items-center justify-between gap-3 rounded-2xl border border-amber-400/35 bg-amber-400/10 px-4 py-3 text-left text-[14px] font-semibold text-amber-200 hover:border-amber-300/60"
-            >
-              <span>{pendingCount} user{pendingCount !== 1 ? 's are' : ' is'} waiting for your approval</span>
-              <span className="rounded-full bg-amber-400 px-3 py-1 text-[13px] font-bold text-slate-950">Review</span>
-            </button>
-          )}
 
           {loadError ? (
             <ErrorState message={loadError} onRetry={() => load(page)} />
           ) : !firstLoad && users.length === 0 ? (
             <EmptyState
-              title={approvals ? 'No pending requests' : 'No users found'}
-              hint={!approvals && hasFilters ? 'Try a different search or filter.' : undefined}
+              title="No users found"
+              hint={hasFilters ? 'Try a different search or filter.' : undefined}
             />
           ) : (
             <div className={loading && !firstLoad ? 'opacity-60 transition-opacity' : undefined} aria-busy={loading}>
@@ -366,12 +282,11 @@ export default function UsersView({ mode = 'users' }) {
                     <th scope="col">Joined</th>
                     <th scope="col">Documents</th>
                     <th scope="col">Status</th>
-                    <th scope="col">Decision</th>
                     <th scope="col" className="text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {firstLoad ? <SkeletonRows cols={7} /> : users.map((u) => (
+                  {firstLoad ? <SkeletonRows cols={6} /> : users.map((u) => (
                     <tr key={u.id} aria-selected={u.id === selectedId} onClick={() => setSelectedId(u.id)} className="cursor-pointer">
                       <td className="max-w-[240px]">
                         <button type="button" onClick={() => setSelectedId(u.id)} className="flex w-full min-w-0 items-center gap-3 text-left" aria-label={`Select ${u.username}`}>
@@ -386,16 +301,6 @@ export default function UsersView({ mode = 'users' }) {
                       <td className="whitespace-nowrap text-[var(--muted)]">{formatISTDate(u.createdAt)}</td>
                       <td className="text-white">{u.documentCount ?? '-'}</td>
                       <td><Badge tone={statusTone(u.status)} dot>{cap(u.status)}</Badge></td>
-                      <td className="max-w-[200px] text-[var(--muted)]">
-                        {u.decidedAt ? (
-                          <>
-                            <span className="capitalize">{u.decision}</span> {formatISTDate(u.decidedAt)}
-                            {u.decisionReason && (
-                              <div title={u.decisionReason} className="truncate text-[13px]">{u.decisionReason}</div>
-                            )}
-                          </>
-                        ) : '-'}
-                      </td>
                       <td>{rowActions(u)}</td>
                     </tr>
                   ))}
@@ -415,9 +320,6 @@ export default function UsersView({ mode = 'users' }) {
             user={selected}
             detail={detail.id === selectedId ? detail.user : null}
             detailLoading={detailLoading}
-            busy={Boolean(busyId)}
-            onApprove={(u) => setStatus(u, 'approve')}
-            onReject={setRejectingUser}
           />
         </div>
       </div>
@@ -433,15 +335,6 @@ export default function UsersView({ mode = 'users' }) {
               setEditingUser(null)
               setSuccess(message)
             }}
-          />
-        )}
-        {rejectingUser && (
-          <RejectReasonModal
-            user={rejectingUser}
-            revoke={rejectingUser.status === 'approved'}
-            busy={busyId === rejectingUser.id}
-            onConfirm={(reason) => setStatus(rejectingUser, 'reject', reason)}
-            onClose={() => setRejectingUser(null)}
           />
         )}
         {deletingUser && (

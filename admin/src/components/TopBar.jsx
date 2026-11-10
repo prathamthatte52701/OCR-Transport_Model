@@ -60,7 +60,7 @@ function UserMenu({ user, onLogout }) {
   )
 }
 
-export default function TopBar({ user, pending, bellTo = '/approvals', onOpenMenu, drawerOpen, menuButtonRef, onLogout, sidebarHidden = false, onToggleSidebar, chatUnread = 0, chatOpen = false, onToggleChat, chatButtonRef }) {
+export default function TopBar({ user, pending, bellTo = '/password-requests', onOpenMenu, drawerOpen, menuButtonRef, onLogout, sidebarHidden = false, onToggleSidebar, chatUnread = 0, chatOpen = false, onToggleChat, chatButtonRef }) {
   const sidebarLabel = sidebarHidden ? 'Show sidebar' : 'Hide sidebar'
   return (
     <header className="sticky top-0 z-30 border-b border-[var(--line-soft)] bg-[rgba(7,10,31,0.86)]">
@@ -78,7 +78,7 @@ export default function TopBar({ user, pending, bellTo = '/approvals', onOpenMen
             <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-5.4A8 8 0 1 1 21 12Z" /></svg>
             {chatUnread > 0 && <span aria-hidden="true" className="absolute -right-1.5 -top-1.5 grid min-w-[20px] place-items-center rounded-full bg-rose-500 px-1 text-[13px] font-bold leading-5 text-white">{badgeText(chatUnread)}</span>}
           </button>
-          <Link to={bellTo} aria-label={pending > 0 ? `${pending} items need attention` : 'Approvals'} className="relative grid h-10 w-10 place-items-center rounded-xl border border-[var(--line)] bg-[rgba(124,108,255,0.08)] text-white hover:bg-[rgba(124,108,255,0.18)]">
+          <Link to={bellTo} aria-label={pending > 0 ? `${pending} items need attention` : 'Password requests'} className="relative grid h-10 w-10 place-items-center rounded-xl border border-[var(--line)] bg-[rgba(124,108,255,0.08)] text-white hover:bg-[rgba(124,108,255,0.18)]">
             <svg className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" /></svg>
             {pending > 0 && <span className="absolute -right-1.5 -top-1.5 grid min-w-[20px] place-items-center rounded-full bg-rose-500 px-1 text-[13px] font-bold leading-5 text-white">{pending > 99 ? '99+' : pending}</span>}
           </Link>
