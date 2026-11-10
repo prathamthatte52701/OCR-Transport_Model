@@ -25,7 +25,7 @@ Checklist of every feature. Tick after commit. Re-read this + spec at start of e
 - [x] 2.7 Upload API (single + bulk 5) — MAX_BULK_FILES=5, MAX_DOWNLOAD_ALL_IDS=30, PDF must be exactly 1 page, documentType removed from upload forms entirely
 - [x] 2.8 Frontend pages (review/list/details/downloads/dashboard/activity/help) — shared frontend/src/utils/receiptFields.js field-list constant used across DocumentDetailPage/UploadPage/DocumentsViewAllPage/MyActivityPage; needs-review filter added to DocumentsPage
 - [x] 2.9 Admin pages updated for new fields — flat FIELDS list in AdminDocumentsPage, documentsByType chart removed, stale Excel/workbook text cleaned up
-- [ ] 2.10 Live check 5 receipts + Loop 2 report
+- [x] 2.10 Live check 5 receipts + Loop 2 report — pending commit. Found + fixed real bug: 26-field JSON output was getting cut off (GROQ_MAX_TOKENS default 2000 + reasoning_effort=high ate the budget before the answer) — bumped default to 3000/ceiling 8000, reasoning_effort default to "low". Found + fixed real bug: receiptNumber prompt leaked the row label into the value ("GNo38420" instead of "38420") — tightened prompt instruction, re-verified fix live. Single upload (Pawan, GST fields): near-perfect extraction after fixes. Bulk upload of 5 (incl. two-copy slip, 2x Baba watermark): all 5 reached "processed" status (no more cutoff failures), but the two-copy slip extracted mostly blank fields — a known hard case already flagged honestly by the 2.2 preprocessing agent (overprint + residual watermark noise defeats a deterministic approach). See Loop 2 report for full details.
 
 ## Loop 3 — Proof and Polish
 - [ ] 3.1 Ground truth (spec/ground_truth.json)
@@ -40,6 +40,9 @@ Checklist of every feature. Tick after commit. Re-read this + spec at start of e
 
 ## Commit log
 (hash — message — one-line result, appended as features land)
+- 1007063 — Transport receipt backend engine — schema/extraction/warnings/duplicate/router, bundled 1.10 fallout
+- 8b2299b — Transport receipt frontend field list — shared receiptFields.js, needs-review filter, build clean
+- a02d056 — Transport receipt admin field list — flat FIELDS list, documentsByType chart removed, build clean
 - d612416 — bootstrap Transport OCR Model from ACKN base — copy + identity rename (DB/ports/titles/keys), .gitignore fixed
 - 629b1d1 — fix origin defaults to 3000/4000 — backend/.env written with real secrets, venv+npm installs verified, backend boots on :2000 (Mongo connected, 7 Groq keys loaded), frontend+admin build clean, pushed to origin/master
 - c63464c — remove Excel feature completely (backend/frontend/admin) — workbook routes, export-history, Save/bulk-save UI, openpyxl dep, dashboard widgets all gone; known test fallout listed above for 1.10

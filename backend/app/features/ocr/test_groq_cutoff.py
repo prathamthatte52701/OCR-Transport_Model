@@ -70,18 +70,18 @@ async def test_cut_off_retries_once_with_doubled_limit_same_key(
     assert REPLY_TEXT not in log
 
 
-async def test_doubling_is_capped_at_4000(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_doubling_is_capped_at_8000(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[tuple[str, dict]] = []
-    _fake(monkeypatch, ["k1"], {"k1": [("x", "length"), ("{}", "stop")]}, 3000, seen)
+    _fake(monkeypatch, ["k1"], {"k1": [("x", "length"), ("{}", "stop")]}, 5000, seen)
     assert await groq_provider.GroqProvider().extract("s", "u") == "{}"
-    assert [kw["max_tokens"] for _, kw in seen] == [3000, 4000]
+    assert [kw["max_tokens"] for _, kw in seen] == [5000, 8000]
 
 
-async def test_cut_off_at_4000_does_not_retry(
+async def test_cut_off_at_8000_does_not_retry(
     monkeypatch: pytest.MonkeyPatch, sink: list[str]
 ) -> None:
     seen: list[tuple[str, dict]] = []
-    _fake(monkeypatch, ["k1", "k2"], {"k1": [(REPLY_TEXT, "length")]}, 4000, seen)
+    _fake(monkeypatch, ["k1", "k2"], {"k1": [(REPLY_TEXT, "length")]}, 8000, seen)
     monkeypatch.setattr(groq_provider, "_rotation", iter([0]))
     with pytest.raises(AIExtractionError) as ei:
         await groq_provider.GroqProvider().extract("s", "u")

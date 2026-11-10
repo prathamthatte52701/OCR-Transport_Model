@@ -8,7 +8,7 @@ These receipts come from two different operators with different printed layouts.
 Extract exactly these 26 values:
 1. operatorName - the transport company's own name (e.g. "Pawan Travels", "Baba Travels"), printed in the letterhead or in brackets at the bottom.
 2. operatorGstin - the OPERATOR's own 15-character GST number (not the consignor's or consignee's).
-3. receiptNumber - the receipt/GR number (Pawan: "Gr No"; Baba: "Receipt No", may look like "P98506" or "186798"). Keep it exactly as printed, letters and digits as-is.
+3. receiptNumber - the receipt/GR number (Pawan: "Gr No"; Baba: "Receipt No", may look like "P98506" or "186798"). Keep it exactly as printed, letters and digits as-is. Do NOT include the row's own label text in the value - e.g. if the row reads "Gr No : 38420", the value is "38420", not "GrNo38420" or "GNo38420". Only include a leading letter when it is part of the number itself, like Baba's "P98506".
 4. date - the date next to the receipt number/GR number. If TWO different dates appear on the receipt, use the one in the SAME row/field as the receipt number, never a date from an unrelated row. Convert to DD/MM/YYYY in your output.
 5. time - the time next to the date (Pawan's "Dt" row often has a time stamp). Keep as printed (e.g. "14:30" or "2:30 PM").
 6. fromPlace - the origin place/branch, if printed.

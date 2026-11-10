@@ -29,8 +29,11 @@ class Settings(BaseSettings):
     groq_model: str = Field(default=DEFAULT_GROQ_MODEL, alias="GROQ_MODEL")
     # Unset = "high". Set but blank = None = do not send the parameter
     # (models without a reasoning mode reject it with a 400).
-    groq_reasoning_effort: str | None = Field(default="high", alias="GROQ_REASONING_EFFORT")
-    groq_max_tokens: int = Field(default=2000, alias="GROQ_MAX_TOKENS")
+    # Transport's 26-field JSON output is much larger than ACKN's 2-4 fields, and a
+    # reasoning model's thinking tokens are drawn from the same max_tokens budget before
+    # the JSON output - "low" leaves far more of that budget for the actual answer.
+    groq_reasoning_effort: str | None = Field(default="low", alias="GROQ_REASONING_EFFORT")
+    groq_max_tokens: int = Field(default=3000, alias="GROQ_MAX_TOKENS")
     frontend_origin: str = Field(default=DEFAULT_FRONTEND_ORIGIN, alias="FRONTEND_ORIGIN")
     admin_origin: str = Field(default=DEFAULT_ADMIN_ORIGIN, alias="ADMIN_ORIGIN")
     admin_1_password: str = Field(default="", alias="ADMIN_1_PASSWORD")
@@ -121,10 +124,10 @@ class Settings(BaseSettings):
     @classmethod
     def _clean_max_tokens(cls, value: object) -> object:
         if value is None or (isinstance(value, str) and not value.strip()):
-            return 2000
+            return 3000
         text = str(value).strip()
-        if not text.isascii() or not text.isdigit() or not 50 <= int(text) <= 4000:
-            raise ValueError("GROQ_MAX_TOKENS must be a whole number from 50 to 4000.")
+        if not text.isascii() or not text.isdigit() or not 50 <= int(text) <= 8000:
+            raise ValueError("GROQ_MAX_TOKENS must be a whole number from 50 to 8000.")
         return int(text)
 
     @field_validator("audit_log_retention_days", mode="before")

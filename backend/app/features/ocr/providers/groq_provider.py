@@ -25,7 +25,7 @@ _RETRYABLE_STATUSES = {401, 403, 429}
 # triggers failover to the next key instead of just hanging on a bad one.
 CALL_TIMEOUT_SECONDS = 60
 # Same ceiling as the GROQ_MAX_TOKENS setting (config.py): a cut-off retry never goes above it.
-MAX_TOKENS_CEILING = 4000
+MAX_TOKENS_CEILING = 8000
 
 
 # Process-wide rotation counter: a new GroqProvider is built for every document, so a per-instance
