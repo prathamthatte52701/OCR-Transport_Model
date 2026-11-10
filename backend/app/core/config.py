@@ -12,8 +12,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 MIN_JWT_SECRET_LENGTH = 32
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 DEFAULT_DB_NAME = "docintel_transport"
-DEFAULT_FRONTEND_ORIGIN = "http://localhost:5174"
-DEFAULT_ADMIN_ORIGIN = "http://localhost:5175"
+DEFAULT_FRONTEND_ORIGIN = "http://localhost:3000"
+DEFAULT_ADMIN_ORIGIN = "http://localhost:4000"
 DEFAULT_AUDIT_LOG_RETENTION_DAYS = 365
 
 

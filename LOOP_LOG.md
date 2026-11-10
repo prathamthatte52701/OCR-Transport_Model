@@ -4,8 +4,8 @@ Checklist of every feature. Tick after commit. Re-read this + spec at start of e
 
 ## Loop 1 — Foundation
 - [x] 1.1 Pre-checks (refs exist, 20 images, spec dir, remote empty) — no commit needed
-- [ ] 1.2 Robocopy ACKN base into repo — pending commit
-- [ ] 1.3 Rename identity (DB docintel_transport, ports 2000/3000/4000, grep leftovers)
+- [x] 1.2 Robocopy ACKN base into repo — d612416
+- [x] 1.3 Rename identity (DB docintel_transport, ports 2000/3000/4000, grep leftovers) — d612416
 - [ ] 1.4 Env setup (.gitignore, .env.example, .env, venv, npm install, first push)
 - [ ] 1.5 Remove Excel feature completely
 - [ ] 1.6 Remove approval flow + Google sign-in
@@ -40,3 +40,4 @@ Checklist of every feature. Tick after commit. Re-read this + spec at start of e
 
 ## Commit log
 (hash — message — one-line result, appended as features land)
+- d612416 — bootstrap Transport OCR Model from ACKN base — copy + identity rename (DB/ports/titles/keys), .gitignore fixed
