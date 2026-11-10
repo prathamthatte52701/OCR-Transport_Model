@@ -9,8 +9,8 @@ Checklist of every feature. Tick after commit. Re-read this + spec at start of e
 - [x] 1.4 Env setup (.gitignore, .env.example, .env, venv, npm install, first push) — d612416, 629b1d1
 - [x] 1.5 Remove Excel feature completely — pending commit. Known fallout for 1.10: backend test_admin_audit.py, test_ui_aggregates.py, documents/test_isolation.py, ocr/test_date_needs_review.py, core/test_indexes.py reference deleted excel code; scripts/find_duplicate_workbooks.py + its test still import deleted excel_service (dropped in 1.8 anyway); `exported` field left on documents schema/correction (harmless, Excel-era leftover, consider stripping later)
 - [x] 1.6 Remove approval flow + Google sign-in — pending commit. Known fallout for 1.10: backend tests test_admin_vs_admin, test_dashboard_stats, test_ui_aggregates, test_password_requests_admin, test_field_limits (google token test), test_wipe_all_except_admins, chat/test_chat_permissions, documents/test_isolation, test_password_requests, chat/test_chat_service all reference removed approval/pending/Google logic. Admin UI still labels active users "Approved" (status value kept as "approved" string, cosmetic only — consider relabel in UI pass).
-- [ ] 1.7 Remove Save step
-- [ ] 1.8 Scripts: keep/drop per spec section 12
+- [x] 1.7 Remove Save step — satisfied by 1.5 (c63464c): ACKN's "Save" button was save-to-Excel; no separate "saved" document status existed. Verified clean, no new commit needed.
+- [x] 1.8 Scripts: keep/drop per spec section 12 — pending commit. Kept: seed_admin, reset_admin_password, wipe_all_except_admins (+test_wipe_password_requests), cleanup_orphan_corrections. Dropped: find_duplicate_workbooks, strip_confidence, reset_database (migrate_user_status already gone in 1.6).
 - [ ] 1.9 Hardening gap check vs CONSIGNOR MODEL
 - [ ] 1.10 Fix broken tests + browser smoke
 - [ ] 1.11 Push + Loop 1 report
@@ -43,3 +43,4 @@ Checklist of every feature. Tick after commit. Re-read this + spec at start of e
 - d612416 — bootstrap Transport OCR Model from ACKN base — copy + identity rename (DB/ports/titles/keys), .gitignore fixed
 - 629b1d1 — fix origin defaults to 3000/4000 — backend/.env written with real secrets, venv+npm installs verified, backend boots on :2000 (Mongo connected, 7 Groq keys loaded), frontend+admin build clean, pushed to origin/master
 - c63464c — remove Excel feature completely (backend/frontend/admin) — workbook routes, export-history, Save/bulk-save UI, openpyxl dep, dashboard widgets all gone; known test fallout listed above for 1.10
+- 95de921 — remove approval flow + Google sign-in — signup auto-logs-in active user now; Approvals/RejectReasonModal/ApprovedWelcomeDialog/GoogleSignInButton deleted; known test fallout listed above for 1.10
