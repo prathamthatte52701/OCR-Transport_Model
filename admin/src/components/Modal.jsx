@@ -1,0 +1,55 @@
+import { useEffect } from 'react'
+import { createPortal } from 'react-dom'
+import { motion } from 'framer-motion'
+
+// Shared backdrop-fade + scale-in wrapper for the Edit User / Edit Document
+// modals. Always mount this INSIDE an <AnimatePresence> in the parent so the
+// exit animation runs on close.
+//
+// Esc-to-close lives here (one listener, inherited by every admin modal:
+// ConfirmModal, ConfirmPurgeModal, EditUserModal, EditDocumentModal) rather
+// than in each modal - this component only ever calls `onClose`, never a
+// confirm/submit action, so it's safe to share unconditionally: for
+// ConfirmPurgeModal (the nuke flow) `onClose` is that modal's own
+// `handleClose`, which already no-ops while a delete is in flight, and
+// Enter-to-confirm is deliberately NOT wired here or anywhere nuke-related -
+// see ConfirmPurgeModal.jsx.
+// Rendered through a portal into the theme root (not into the page column, which is a size container:
+// a fixed element inside one would be placed against that column instead of the screen; and not into
+// <body>, which is outside .theme-admin and would lose every admin style).
+export default function Modal({ onClose, children, maxWidth = 'max-w-sm', ariaLabel }) {
+  useEffect(() => {
+    function handleKeyDown(e) {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
+  return createPortal(
+    <motion.div
+      data-admin-modal
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#03051a]/75 px-4"
+      onClick={onClose}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.15 }}
+    >
+      <motion.div
+        className={`w-full ${maxWidth} max-h-[92vh] overflow-y-auto rounded-[20px] border border-[var(--line)] bg-[var(--surface-solid)] p-6 text-[var(--text)] shadow-[0_24px_80px_rgba(2,4,24,0.7),0_0_40px_rgba(124,92,255,0.18)]`}
+        role="dialog"
+        aria-modal="true"
+        aria-label={ariaLabel}
+        onClick={(e) => e.stopPropagation()}
+        initial={{ opacity: 0, scale: 0.96, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.96, y: 8 }}
+        transition={{ duration: 0.18, ease: 'easeOut' }}
+      >
+        {children}
+      </motion.div>
+    </motion.div>,
+    document.querySelector('.theme-admin') ?? document.body,
+  )
+}

@@ -1,0 +1,871 @@
+import { useEffect, useRef, useState } from 'react'
+import { useMutation } from '@tanstack/react-query'
+import { useNavigate, Link } from 'react-router-dom'
+import { toast } from 'sonner'
+import { AlertCircle } from 'lucide-react'
+import { uploadDocument, getDocument, bulkUploadDocuments, correctDocument } from '../api/documents'
+import { saveDocument } from '../api/excel'
+import { validateDocumentFile } from '../utils/documentValidation'
+import UploadCard from '../components/UploadCard'
+import CorrectionModal from '../components/CorrectionModal'
+import LazyDocumentViewer from '../components/LazyDocumentViewer'
+import { confirmAction } from '../store/dialogStore'
+import challanRouteVisual from '../assets/transport-bill-route-visual.png'
+import {
+  BULK_WAIT_LIMIT_MS,
+  SINGLE_WAIT_LIMIT_MS,
+  SLOW_BATCH_NOTE,
+  SLOW_MESSAGE,
+  UPLOAD_UNCONFIRMED_MESSAGE,
+  isTimedOut,
+  pollDelayMs,
+  pollOutcome,
+} from '../utils/uploadPolling'
+import BackButton from '../components/BackButton'
+
+// Per-documentType editable field list for the bulk review view - mirrors
+// DocumentDetailPage's fieldsFor(), but reads from a bulk result item
+// (f.taxInvoiceNo/f.number/etc, populated by the poll loop) instead of a
+// full document object.
+function reviewFieldsFor(f) {
+  if (f.documentType === 'Tax Invoice') {
+    return [
+      { key: 'taxInvoiceNo', label: 'TAX INVOICE No.', value: f.taxInvoiceNo, needsReview: f.taxInvoiceNoNeedsReview },
+      { key: 'referenceNo', label: 'Reference No.', value: f.referenceNo, needsReview: f.referenceNoNeedsReview },
+      { key: 'date', label: 'Date', value: f.date, needsReview: f.dateNeedsReview, reviewText: 'Please check this date' },
+    ]
+  }
+  return [
+    { key: 'number', label: 'Delivery Challan No.', value: f.number, needsReview: f.numberNeedsReview },
+    { key: 'date', label: 'Date', value: f.date, needsReview: f.dateNeedsReview, reviewText: 'Please check this date' },
+  ]
+}
+
+const DOCUMENT_TYPES = ['Tax Invoice', 'Delivery Challan']
+const MAX_BULK_FILES = 10
+// Polling waits are wall-clock limits (see utils/uploadPolling.js): only the SERVER can mark a file
+// 'failed'. When our own wait runs out the row becomes 'slow' (still processing), never 'failed'.
+function LogisticsUploadIllustration() {
+  return (
+    <div className="relative mt-10 hidden min-h-[310px] overflow-hidden rounded-[30px] border border-blue-300/10 bg-slate-950/20 lg:block">
+      <img
+        src={challanRouteVisual}
+        alt="Acknowledgement upload visual"
+        className="absolute inset-0 h-full w-full object-cover object-center"
+      />
+      <div className="absolute inset-0 bg-gradient-to-t from-slate-950/55 via-transparent to-slate-950/10" />
+      <div className="absolute left-5 top-5 rounded-full border border-blue-300/20 bg-blue-500/12 px-4 py-2 text-[10.5px] font-bold uppercase tracking-[0.18em] text-blue-100 backdrop-blur-xl">
+        Acknowledgement Intake
+      </div>
+    </div>
+  )
+}
+
+function GuidelineCard() {
+  return (
+    <div className="rounded-3xl border border-blue-300/12 bg-slate-950/44 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+      <div className="flex gap-4">
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border border-blue-300/20 bg-blue-500/15 text-[14.7px] font-black text-blue-200 shadow-[0_0_28px_rgba(37,99,235,0.24)]">i</span>
+        <div className="space-y-2 text-[14.7px] leading-6 text-slate-400">
+          <p>- Accepted formats: JPG, JPEG, PNG, PDF</p>
+          <p>- Maximum file size: 5 MB</p>
+          <p>- Pick the document type first - it decides which field(s) get extracted</p>
+          <p>- Only the Number and Date from the top header are extracted; items, GST, stamps, and signatures are ignored</p>
+          <p>- Processing may take a few seconds</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function UploadProcessingState({ message }) {
+  return (
+    <div className="flex min-h-[520px] flex-col items-center justify-center gap-5 rounded-[26px] border border-blue-300/12 bg-slate-950/34 px-4 py-20 text-center">
+      <div className="relative h-20 w-20">
+        <div className="h-20 w-20 rounded-full border border-blue-300/15 bg-blue-500/10 shadow-[0_0_48px_rgba(37,99,235,0.2)]" />
+        <div className="absolute inset-0 h-20 w-20 animate-spin rounded-full border-2 border-transparent border-r-cyan-300 border-t-blue-500" />
+        <div className="absolute inset-4 flex items-center justify-center rounded-full border border-white/10 bg-slate-950">
+          <span className="text-[12.6px] font-black text-blue-200">OCR</span>
+        </div>
+      </div>
+      <div>
+        <p className="text-lg font-black text-white">{message}</p>
+        <p className="mt-2 text-[14.7px] text-slate-500">This may take a few moments.</p>
+      </div>
+      <div className="flex gap-1.5">
+        {[0, 1, 2].map((i) => (
+          <div
+            key={i}
+            className="h-2 w-2 animate-bounce rounded-full bg-blue-400"
+            style={{ animationDelay: `${i * 0.15}s` }}
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function StatusChip({ status }) {
+  const styles = {
+    waiting: 'border-slate-500/30 bg-slate-500/10 text-slate-400',
+    processing: 'border-blue-300/30 bg-blue-500/10 text-blue-200',
+    done: 'border-emerald-300/30 bg-emerald-400/10 text-emerald-200',
+    failed: 'border-rose-400/30 bg-rose-500/10 text-rose-200',
+    slow: 'border-amber-300/30 bg-amber-400/10 text-amber-200',
+  }
+  const labels = { waiting: 'Waiting', processing: 'Processing', done: 'Done', failed: 'Failed', slow: 'Still processing' }
+  return (
+    <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11.6px] font-bold uppercase tracking-[0.1em] ${styles[status]}`}>
+      {status === 'processing' && (
+        <span className="h-2.5 w-2.5 animate-spin rounded-full border-2 border-transparent border-t-blue-300 border-r-blue-300" />
+      )}
+      {labels[status]}
+    </span>
+  )
+}
+
+export default function UploadPage() {
+  const [file, setFile] = useState(null)
+  const [documentType, setDocumentType] = useState(DOCUMENT_TYPES[0])
+  const [status, setStatus] = useState('idle') // idle | uploading | processing | slow | done | error
+  const [error, setError] = useState('')
+  const pollRef = useRef(null) // pending setTimeout of the single-upload poll loop
+  const pollRunRef = useRef(0) // bumping it cancels a running loop (unmount, reset, new upload)
+  const doneNavRef = useRef(null) // pending 'go to the document' timeout after a finished upload
+  const mountedRef = useRef(false) // an upload request that resolves after unmount must not start a loop
+  const [slowText, setSlowText] = useState(SLOW_MESSAGE)
+  const navigate = useNavigate()
+
+  // Bulk upload - a separate, additive flow alongside the single-file one
+  // above. Nothing in this block changes single-file state/handlers.
+  const [mode, setMode] = useState('single') // 'single' | 'bulk'
+  const [bulkFiles, setBulkFiles] = useState([]) // [{ file, documentType, status, error, docId }]
+  const [bulkError, setBulkError] = useState('')
+  // Type given to files added from now on: the last "Set all as" choice (default Tax Invoice).
+  // Kept across "Start New Batch" on purpose.
+  const [bulkDefaultType, setBulkDefaultType] = useState(DOCUMENT_TYPES[0])
+  const [bulkSubmitting, setBulkSubmitting] = useState(false)
+  const [reviewIndex, setReviewIndex] = useState(0)
+  const [reviewEditingField, setReviewEditingField] = useState(null) // { docId, key, label, value }
+  const bulkPollRef = useRef(null) // pending setTimeout of the bulk poll loop
+  const bulkRunRef = useRef(0) // bumping it cancels a running loop
+  // setInterval's closure would otherwise see bulkFiles as it was when the
+  // interval was created - this ref is kept in sync so each tick reads the
+  // current list instead of a stale one.
+  const bulkFilesRef = useRef([])
+  useEffect(() => { bulkFilesRef.current = bulkFiles }, [bulkFiles])
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      pollRunRef.current += 1
+      bulkRunRef.current += 1
+      if (pollRef.current) clearTimeout(pollRef.current)
+      if (bulkPollRef.current) clearTimeout(bulkPollRef.current)
+      if (doneNavRef.current) clearTimeout(doneNavRef.current)
+    }
+  }, [])
+
+  async function handleUpload() {
+    if (!file) return
+    setStatus('uploading')
+    setError('')
+
+    try {
+      const doc = await uploadDocument(file, documentType)
+      if (!mountedRef.current) return // left the page while uploading: do not start a poll loop
+      const docId = doc?._id
+      if (!docId) throw new Error('Upload failed: no document ID returned.')
+
+      setStatus('processing')
+
+      // Self-scheduling loop: one poll in flight at a time, 2 s then 5 s steps, wall-clock limit.
+      if (pollRef.current) clearTimeout(pollRef.current)
+      const run = ++pollRunRef.current
+      const startedAt = Date.now()
+      const tick = async () => {
+        if (run !== pollRunRef.current) return
+        let outcome = 'pending'
+        let polled = null
+        try {
+          polled = await getDocument(docId)
+          outcome = pollOutcome(polled)
+        } catch {
+          // network error / 5xx: never a failure by itself, just try again on the next tick
+        }
+        if (run !== pollRunRef.current) return
+        if (outcome === 'done') {
+          pollRef.current = null
+          setStatus('done')
+          doneNavRef.current = setTimeout(() => navigate(`/documents/${docId}`), 800)
+          return
+        }
+        if (outcome === 'failed') {
+          pollRef.current = null
+          setStatus('error')
+          setError(polled.processingError || 'We could not process this document. Please try uploading it again.')
+          return
+        }
+        const elapsed = Date.now() - startedAt
+        if (isTimedOut(elapsed, SINGLE_WAIT_LIMIT_MS)) {
+          // Our wait is over, not the server's: it may well finish. Neutral state, polling stops.
+          pollRef.current = null
+          setSlowText(SLOW_MESSAGE)
+          setStatus('slow')
+          return
+        }
+        pollRef.current = setTimeout(tick, pollDelayMs(elapsed))
+      }
+      pollRef.current = setTimeout(tick, pollDelayMs(0))
+    } catch (err) {
+      if (!mountedRef.current) return
+      if (!err.response) {
+        // The request got no answer (timeout / dropped connection): the server may well have stored
+        // the file, so this is NOT a failure - say so instead of inviting a duplicate upload.
+        setSlowText(UPLOAD_UNCONFIRMED_MESSAGE)
+        setStatus('slow')
+        return
+      }
+      setStatus('error')
+      setError(err.userMessage || 'Could not upload this document. Please try again.')
+    }
+  }
+
+  function handleReset() {
+    pollRunRef.current += 1
+    if (doneNavRef.current) {
+      clearTimeout(doneNavRef.current)
+      doneNavRef.current = null
+    }
+    if (pollRef.current) {
+      clearTimeout(pollRef.current)
+      pollRef.current = null
+    }
+    setFile(null)
+    setStatus('idle')
+    setError('')
+  }
+
+  const isProcessing = status === 'uploading' || status === 'processing'
+
+  // -- Bulk upload -----------------------------------------------------------
+
+  function handleBulkFileSelect(e) {
+    const selected = Array.from(e.target.files || [])
+    e.target.value = ''
+    if (selected.length === 0) return
+
+    if (bulkFiles.length + selected.length > MAX_BULK_FILES) {
+      setBulkError(`You can upload a maximum of ${MAX_BULK_FILES} files at once.`)
+      return
+    }
+
+    const additions = []
+    for (const f of selected) {
+      const err = validateDocumentFile(f)
+      if (err) {
+        setBulkError(`${f.name}: ${err}`)
+        return
+      }
+      additions.push({ file: f, documentType: bulkDefaultType, status: 'waiting', error: '', docId: null })
+    }
+    setBulkError('')
+    setBulkFiles((prev) => [...prev, ...additions])
+  }
+
+  function removeBulkFile(index) {
+    setBulkFiles((prev) => prev.filter((_, i) => i !== index))
+  }
+
+  function setBulkFileType(index, type) {
+    setBulkFiles((prev) => prev.map((f, i) => (i === index ? { ...f, documentType: type } : f)))
+  }
+
+  // "Set all as": one click labels every file in the list. Only touches local state - it
+  // never submits and the upload request format is unchanged.
+  function setAllBulkTypes(type) {
+    setBulkDefaultType(type)
+    setBulkFiles((prev) => prev.map((f) => ({ ...f, documentType: type })))
+  }
+
+  // Which highlight to show: the shared type when every row agrees, otherwise 'mixed'.
+  const bulkTypeState =
+    bulkFiles.length > 0 && bulkFiles.every((f) => f.documentType === bulkFiles[0].documentType)
+      ? bulkFiles[0].documentType
+      : 'mixed'
+
+  function stopBulkPolling() {
+    bulkRunRef.current += 1
+    if (bulkPollRef.current) {
+      clearTimeout(bulkPollRef.current)
+      bulkPollRef.current = null
+    }
+  }
+
+  // Self-scheduling loop (never two rounds at once, 2 s then 5 s steps). The wait limit is wall-clock
+  // time for the whole batch. A poll that throws (network error / 5xx) is just retried next round;
+  // only a server 'failed' makes a row failed. When the limit passes, rows still processing become
+  // 'slow' and polling stops for good.
+  function startBulkPolling() {
+    stopBulkPolling()
+    const run = bulkRunRef.current
+    const startedAt = Date.now()
+
+    const tick = async () => {
+      if (run !== bulkRunRef.current) return
+      const pending = bulkFilesRef.current.filter((f) => f.status === 'processing' && f.docId)
+      if (pending.length === 0) {
+        bulkPollRef.current = null
+        setBulkSubmitting(false)
+        return
+      }
+
+      // Polling is just a status read per file, not processing - running these checks together
+      // doesn't run OCR concurrently, the server's own single-slot queue guarantees that.
+      const updates = await Promise.all(pending.map(async (f) => {
+        try {
+          const polled = await getDocument(f.docId)
+          const outcome = pollOutcome(polled)
+          if (outcome === 'done') {
+            return {
+              docId: f.docId,
+              status: 'done',
+              taxInvoiceNo: polled.taxInvoiceNo,
+              referenceNo: polled.referenceNo,
+              number: polled.number,
+              date: polled.date,
+              numberNeedsReview: polled.numberNeedsReview,
+              dateNeedsReview: polled.dateNeedsReview,
+              taxInvoiceNoNeedsReview: polled.taxInvoiceNoNeedsReview,
+              referenceNoNeedsReview: polled.referenceNoNeedsReview,
+              exported: polled.exported,
+            }
+          }
+          if (outcome === 'failed') return { docId: f.docId, status: 'failed', error: polled.processingError || 'Processing failed.' }
+          return null
+        } catch {
+          return null
+        }
+      }))
+      if (run !== bulkRunRef.current) return
+
+      const changed = updates.filter(Boolean)
+      const settledIds = new Set(changed.map((c) => c.docId))
+      const elapsed = Date.now() - startedAt
+      const timedOut = isTimedOut(elapsed, BULK_WAIT_LIMIT_MS)
+      const stillWaiting = pending.filter((f) => !settledIds.has(f.docId))
+
+      if (changed.length > 0 || (timedOut && stillWaiting.length > 0)) {
+        setBulkFiles((prev) => prev.map((f) => {
+          const u = changed.find((c) => c.docId === f.docId)
+          if (u) {
+            return {
+              ...f,
+              status: u.status,
+              error: u.error || '',
+              taxInvoiceNo: u.taxInvoiceNo,
+              referenceNo: u.referenceNo,
+              number: u.number,
+              date: u.date,
+              numberNeedsReview: u.numberNeedsReview,
+              dateNeedsReview: u.dateNeedsReview,
+              taxInvoiceNoNeedsReview: u.taxInvoiceNoNeedsReview,
+              referenceNoNeedsReview: u.referenceNoNeedsReview,
+              exported: u.exported,
+            }
+          }
+          if (timedOut && f.status === 'processing' && f.docId) return { ...f, status: 'slow', error: '' }
+          return f
+        }))
+      }
+
+      if (stillWaiting.length === 0 || timedOut) {
+        bulkPollRef.current = null
+        setBulkSubmitting(false)
+        return
+      }
+      bulkPollRef.current = setTimeout(tick, pollDelayMs(elapsed))
+    }
+    bulkPollRef.current = setTimeout(tick, pollDelayMs(0))
+  }
+
+  async function handleBulkUpload() {
+    if (bulkFiles.length === 0 || bulkSubmitting) return
+    setBulkSubmitting(true)
+    setBulkError('')
+    setBulkFiles((prev) => prev.map((f) => ({ ...f, status: 'processing' })))
+
+    try {
+      const results = await bulkUploadDocuments(
+        bulkFiles.map((f) => f.file),
+        bulkFiles.map((f) => f.documentType)
+      )
+      if (!mountedRef.current) return // left the page while uploading: do not start a poll loop
+
+      setBulkFiles((prev) => prev.map((f, i) => {
+        const r = results[i]
+        if (!r) return { ...f, status: 'failed', error: 'No result returned for this file.' }
+        if (r.error) return { ...f, status: 'failed', error: r.error }
+        return { ...f, status: 'processing', docId: r.document._id }
+      }))
+      startBulkPolling()
+    } catch (err) {
+      if (!mountedRef.current) return
+      setBulkSubmitting(false)
+      if (!err.response) {
+        // No answer to the upload request (timeout / dropped connection): the server may have stored
+        // the files, so show the neutral state, never 'failed'.
+        setBulkFiles((prev) => prev.map((f) => ({ ...f, status: 'slow', error: UPLOAD_UNCONFIRMED_MESSAGE })))
+        return
+      }
+      if (err.response.status === 429) {
+        // Rejected before anything was created: put every row back so the form is usable again.
+        setBulkFiles((prev) => prev.map((f) => ({ ...f, status: 'waiting', error: '' })))
+        setBulkError(err.userMessage)
+        return
+      }
+      const message = err.userMessage || 'Upload failed. Please try again.'
+      setBulkFiles((prev) => prev.map((f) => ({ ...f, status: 'failed', error: message })))
+    }
+  }
+
+  function handleBulkReset() {
+    stopBulkPolling()
+    setBulkFiles([])
+    setBulkError('')
+    setBulkSubmitting(false)
+    setReviewIndex(0)
+  }
+
+  const reviewCorrectMutation = useMutation({
+    mutationFn: ({ docId, field, value }) => correctDocument(docId, field, value),
+  })
+
+  // Exposes the same saveDocument() flow used on DocumentDetailPage/
+  // DocumentCard directly from the paginated bulk-review card, so the user
+  // never has to leave this view to export what they're already reviewing.
+  const reviewSaveMutation = useMutation({
+    mutationFn: (docId) => saveDocument(docId),
+  })
+
+  async function handleReviewSave(docId, alreadyExported) {
+    if (alreadyExported) {
+      const ok = await confirmAction({
+        title: 'Save again?',
+        message: 'This document is already in Excel. Saving again will replace the old row.',
+        confirmLabel: 'Yes, Save Again',
+      })
+      if (!ok) return
+    }
+    try {
+      const message = await reviewSaveMutation.mutateAsync(docId)
+      if (message) {
+        toast.success(message)
+        setBulkFiles((prev) => prev.map((f) => (f.docId === docId ? { ...f, exported: true } : f)))
+      }
+    } catch (err) {
+      toast.error(err.userMessage || 'Could not save this document to Excel. Please try again.')
+    }
+  }
+
+  async function handleReviewCorrect(field, newValue) {
+    const docId = reviewEditingField?.docId
+    if (!docId) {
+      toast.error('Could not identify this document. Please reopen it and try again.')
+      return
+    }
+    try {
+      const updated = await reviewCorrectMutation.mutateAsync({ docId, field: field.key, value: newValue })
+      setBulkFiles((prev) => prev.map((f) => (f.docId === docId
+        ? {
+            ...f,
+            taxInvoiceNo: updated.taxInvoiceNo,
+            referenceNo: updated.referenceNo,
+            number: updated.number,
+            date: updated.date,
+            numberNeedsReview: updated.numberNeedsReview,
+            dateNeedsReview: updated.dateNeedsReview,
+            taxInvoiceNoNeedsReview: updated.taxInvoiceNoNeedsReview,
+            referenceNoNeedsReview: updated.referenceNoNeedsReview,
+            exported: updated.exported,
+          }
+        : f)))
+      setReviewEditingField(null)
+    } catch (err) {
+      // CorrectionModal stays open on failure so the user can retry.
+      toast.error(err.userMessage || 'Could not save your correction. Please try again.')
+    }
+  }
+
+  const bulkDoneCount = bulkFiles.filter((f) => f.status === 'done').length
+  const bulkFailedCount = bulkFiles.filter((f) => f.status === 'failed').length
+  const bulkSlowCount = bulkFiles.filter((f) => f.status === 'slow').length
+  const bulkTotal = bulkFiles.length
+  // 'slow' rows are out of our hands (the server may still finish them), so the batch counts as settled.
+  const bulkAllSettled = bulkTotal > 0 && bulkDoneCount + bulkFailedCount + bulkSlowCount === bulkTotal
+
+  const reviewTotal = bulkFiles.length
+  const reviewItem = bulkFiles[reviewIndex] || null
+  // The Review Results screen needs the whole width (data card + file preview side by side),
+  // so while it is showing the page drops the two-column hero layout. Idle/uploading are unchanged.
+  const reviewActive = mode === 'bulk' && bulkAllSettled
+
+  return (
+    <div className="relative min-h-full overflow-hidden bg-[#020817]">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_8%_14%,rgba(37,99,235,0.2),transparent_30%),radial-gradient(circle_at_78%_18%,rgba(6,182,212,0.16),transparent_28%),linear-gradient(180deg,rgba(15,23,42,0.16),rgba(2,6,23,0.98))]" />
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(148,163,184,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.035)_1px,transparent_1px)] bg-[size:56px_56px] opacity-55" />
+
+      <main className={`relative mx-auto grid max-w-[1440px] gap-8 px-4 py-8 sm:px-6 @5xl:min-h-[calc(100vh-94px)] @5xl:items-center lg:px-10 @5xl:py-12 ${reviewActive ? '@5xl:grid-cols-1' : '@5xl:grid-cols-[0.75fr_1.25fr]'}`}>
+
+        <BackButton fallback="/" className="justify-self-start @5xl:col-span-full" />
+        <section className={`max-w-xl ${reviewActive ? 'hidden' : ''}`}>
+          <p className="mb-6 text-[14.7px] font-bold text-blue-400">Upload Document</p>
+          <h1 className="text-4xl font-black leading-[1.16] tracking-[-0.035em] text-white sm:text-5xl @5xl:text-[56px]">
+            Extract. Verify.
+            <span className="block">Number and date,</span>
+            <span className="block text-blue-400 drop-shadow-[0_0_28px_rgba(59,130,246,0.55)]">in seconds.</span>
+          </h1>
+          <p className="mt-6 max-w-lg text-base leading-8 text-slate-400">
+            Pick the document type, upload one file, and the header number and date are extracted automatically.
+          </p>
+          <LogisticsUploadIllustration />
+        </section>
+
+        <section className="rounded-[32px] border border-blue-300/18 bg-slate-900/62 p-5 shadow-[0_34px_120px_rgba(2,8,23,0.55),inset_0_1px_0_rgba(255,255,255,0.08)] backdrop-blur-xl sm:p-7">
+          <div className="mb-5 flex gap-2">
+            <button
+              type="button"
+              onClick={() => setMode('single')}
+              disabled={isProcessing || bulkSubmitting}
+              className={`flex-1 rounded-2xl border px-4 py-2.5 text-[13.6px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
+                mode === 'single'
+                  ? 'border-blue-300/50 bg-blue-500/15 text-blue-100'
+                  : 'border-white/10 bg-white/[0.03] text-slate-400 hover:border-blue-300/25 hover:text-slate-200'
+              }`}
+            >
+              Single Upload
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('bulk')}
+              disabled={isProcessing || bulkSubmitting}
+              className={`flex-1 rounded-2xl border px-4 py-2.5 text-[13.6px] font-bold transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
+                mode === 'bulk'
+                  ? 'border-blue-300/50 bg-blue-500/15 text-blue-100'
+                  : 'border-white/10 bg-white/[0.03] text-slate-400 hover:border-blue-300/25 hover:text-slate-200'
+              }`}
+            >
+              Bulk Upload (up to {MAX_BULK_FILES})
+            </button>
+          </div>
+
+          {mode === 'bulk' ? (
+            bulkAllSettled ? (
+              <>
+              <div className="flex min-h-[460px] flex-col gap-5 rounded-[26px] border border-blue-300/12 bg-slate-950/34 px-5 py-8">
+                <div className="flex flex-col items-center gap-4 text-center">
+                  <div
+                    className={`grid h-20 w-20 place-items-center rounded-full border text-[13.6px] font-black shadow-[0_0_45px_rgba(16,185,129,0.18)] ${
+                      bulkFailedCount === 0
+                        ? 'border-emerald-300/25 bg-emerald-400/15 text-emerald-200'
+                        : 'border-amber-300/25 bg-amber-400/15 text-amber-200'
+                    }`}
+                  >
+                    {bulkDoneCount}/{bulkTotal}
+                  </div>
+                  <p className="text-xl font-black text-white">Review Results</p>
+                  <p className="text-[14.7px] text-slate-400">
+                    {`${bulkDoneCount}/${bulkTotal} processed${bulkFailedCount > 0 ? `, ${bulkFailedCount} failed` : ''}${bulkSlowCount > 0 ? `, ${bulkSlowCount} still processing` : ''}`}
+                  </p>
+                </div>
+
+                {reviewItem && (
+                  <div className="grid w-full gap-6 text-left @5xl:grid-cols-2 @5xl:items-start">
+                  <div className="min-w-0 space-y-4">
+                    <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
+                      <span className="min-w-0 truncate text-[13.6px] font-semibold text-slate-300" title={reviewItem.file.name}>{reviewItem.file.name}</span>
+                      <span className="shrink-0 text-[12.6px] text-slate-500">{reviewItem.documentType}</span>
+                    </div>
+
+                    {reviewItem.status === 'done' ? (
+                      <div className="space-y-2">
+                        <div className="flex justify-end">
+                          <button
+                            onClick={() => handleReviewSave(reviewItem.docId, reviewItem.exported)}
+                            disabled={reviewSaveMutation.isPending}
+                            className="rounded-lg bg-emerald-700 px-4 py-2 text-[12.6px] font-bold text-white transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {reviewSaveMutation.isPending
+                              ? 'Saving...'
+                              : reviewItem.exported
+                                ? 'Save Again'
+                                : 'Save to Excel'}
+                          </button>
+                        </div>
+                        {reviewFieldsFor(reviewItem).map((f) => {
+                          return (
+                            <div key={f.key} className={`flex items-center justify-between gap-3 rounded-xl border bg-white/[0.03] px-4 py-3 border-white/10`}>
+                              <div className="flex min-w-0 items-center gap-2">
+                                <div className="min-w-0">
+                                  <p className="text-[12.6px] text-slate-500">{f.label}</p>
+                                  <p className="truncate text-[14.7px] font-semibold text-slate-200">{f.value || 'Not available'}</p>
+                                  {f.needsReview && <p className="text-[12.6px] text-amber-400">{f.reviewText || 'Looks incomplete - please check against the original'}</p>}
+                                </div>
+                              </div>
+                              <button
+                                onClick={() => setReviewEditingField({ docId: reviewItem.docId, key: f.key, label: f.label, value: f.value })}
+                                className="shrink-0 rounded-lg border border-blue-300/30 px-3 py-1.5 text-[12.6px] font-bold text-blue-200 transition-colors hover:bg-blue-500/10"
+                              >
+                                Edit
+                              </button>
+                            </div>
+                          )
+                        })}
+                        <Link to={`/documents/${reviewItem.docId}`} className="inline-block text-[12.6px] font-bold text-emerald-300 no-underline hover:underline">
+                          Open full document detail
+                        </Link>
+                      </div>
+                    ) : reviewItem.status === 'slow' ? (
+                      <div className="space-y-3 rounded-xl border border-amber-300/30 bg-amber-400/10 px-4 py-3 text-[13.6px] text-amber-100">
+                        <p>{reviewItem.error || SLOW_MESSAGE}</p>
+                        <button onClick={() => navigate('/documents')} className="rounded-lg border border-amber-300/40 px-3 py-1.5 text-[12.6px] font-bold text-amber-100 hover:bg-amber-400/15">
+                          Open My Documents
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="rounded-xl border border-rose-400/30 bg-rose-500/10 px-4 py-3 text-[13.6px] text-rose-200">
+                        Failed: {reviewItem.error || 'Processing failed.'}
+                      </div>
+                    )}
+
+                    {reviewTotal > 1 && (
+                      <div className="flex items-center justify-center gap-4 pt-2">
+                        <button
+                          onClick={() => setReviewIndex((p) => Math.max(0, p - 1))}
+                          disabled={reviewIndex <= 0}
+                          className="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-white/[0.045] px-5 py-3 text-[14.7px] font-bold text-slate-200 transition-colors hover:border-blue-300/30 hover:bg-blue-500/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-white/10 disabled:hover:bg-white/[0.045]"
+                        >
+                          Previous
+                        </button>
+                        <span className="text-[14.7px] font-bold text-slate-400">
+                          {reviewIndex + 1} of {reviewTotal}
+                        </span>
+                        <button
+                          onClick={() => setReviewIndex((p) => Math.min(reviewTotal - 1, p + 1))}
+                          disabled={reviewIndex >= reviewTotal - 1}
+                          className="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-white/[0.045] px-5 py-3 text-[14.7px] font-bold text-slate-200 transition-colors hover:border-blue-300/30 hover:bg-blue-500/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-white/10 disabled:hover:bg-white/[0.045]"
+                        >
+                          Next
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {/* original file of the item being reviewed - shown for failed items too */}
+                  <LazyDocumentViewer file={reviewItem.file} index={reviewIndex} testId="review-preview" />
+                  </div>
+                )}
+
+                {bulkSlowCount > 0 && (
+                  <p data-testid="bulk-slow-note" className="rounded-xl border border-amber-300/25 bg-amber-400/10 px-4 py-2.5 text-center text-[13.6px] text-amber-100">
+                    {SLOW_BATCH_NOTE}
+                  </p>
+                )}
+
+                <button
+                  onClick={handleBulkReset}
+                  className="mx-auto rounded-2xl border border-white/10 bg-white/[0.045] px-6 py-3 text-[14.7px] font-bold text-slate-200 transition-all hover:border-blue-300/30 hover:bg-blue-500/10"
+                >
+                  Start New Batch
+                </button>
+              </div>
+
+              {reviewEditingField && (
+                <CorrectionModal
+                  field={{ label: reviewEditingField.label, value: reviewEditingField.value, key: reviewEditingField.key, docId: reviewEditingField.docId }}
+                  onSave={handleReviewCorrect}
+                  onClose={() => setReviewEditingField(null)}
+                />
+              )}
+              </>
+            ) : bulkSubmitting ? (
+              <div className="space-y-3">
+                <p className="flex items-center justify-center gap-2.5 text-center text-[14.7px] font-bold text-slate-300">
+                  <span className="h-4 w-4 shrink-0 animate-spin rounded-full border-2 border-transparent border-r-cyan-300 border-t-blue-500" />
+                  Processing {bulkDoneCount + bulkFailedCount}/{bulkTotal}...
+                </p>
+                {bulkFiles.map((f, i) => (
+                  <div key={i} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
+                    <span className="min-w-0 truncate text-[13.6px] text-slate-300">
+                      {f.file.name} <span className="text-slate-600">- {f.documentType}</span>
+                    </span>
+                    <StatusChip status={f.status} />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-5">
+                {bulkError && (
+                  <div className="flex items-start gap-3 rounded-2xl border border-rose-400/25 bg-rose-500/10 px-4 py-3 text-[14.7px] text-rose-200">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{bulkError}</span>
+                  </div>
+                )}
+
+                <label className="block cursor-pointer rounded-[26px] border border-dashed border-slate-500/60 bg-slate-950/30 p-8 text-center transition-all hover:border-blue-300/75 hover:bg-blue-500/[0.045]">
+                  <input type="file" accept=".jpg,.jpeg,.png,.pdf" multiple className="hidden" onChange={handleBulkFileSelect} />
+                  <p className="text-[14.7px] font-bold text-white">Click to select up to {MAX_BULK_FILES} files</p>
+                  <p className="mt-1 text-[12.6px] text-slate-500">JPG, JPEG, PNG, PDF - max 5MB each</p>
+                </label>
+
+                {bulkFiles.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Set all as">
+                    <span className="text-[12.6px] font-bold uppercase tracking-wide text-slate-500">Set all as</span>
+                    {DOCUMENT_TYPES.map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        aria-pressed={bulkTypeState === t}
+                        onClick={() => setAllBulkTypes(t)}
+                        className={`rounded-full border px-3.5 py-1.5 text-[12.6px] font-bold transition-colors ${
+                          bulkTypeState === t
+                            ? 'border-blue-300/60 bg-blue-500/20 text-blue-100'
+                            : 'border-white/10 bg-white/[0.035] text-slate-300 hover:border-blue-300/30 hover:bg-blue-500/10'
+                        }`}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                    {bulkTypeState === 'mixed' && (
+                      <span className="rounded-full bg-amber-400/15 px-2.5 py-1 text-[11.6px] font-bold text-amber-200">Mixed</span>
+                    )}
+                  </div>
+                )}
+
+                {bulkFiles.length > 0 && (
+                  <div className="space-y-2">
+                    {bulkFiles.map((f, i) => (
+                      <div key={i} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
+                        <span className="min-w-0 flex-1 truncate text-[13.6px] text-slate-300">{f.file.name}</span>
+                        <select
+                          value={f.documentType}
+                          onChange={(e) => setBulkFileType(i, e.target.value)}
+                          className="rounded-lg border border-white/10 bg-slate-900 px-2 py-1.5 text-[12.6px] font-semibold text-slate-200 focus:outline-none focus:border-blue-300/40"
+                        >
+                          {DOCUMENT_TYPES.map((t) => (
+                            <option key={t} value={t}>{t}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => removeBulkFile(i)}
+                          className="shrink-0 text-[12.6px] font-bold text-rose-300 hover:text-rose-200"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {bulkFiles.length > 0 && (
+                  <button
+                    onClick={handleBulkUpload}
+                    className="w-full rounded-2xl bg-gradient-to-r from-blue-600 to-cyan-500 px-5 py-3.5 text-[14.7px] font-black text-white shadow-[0_18px_45px_rgba(37,99,235,0.3)] transition-all hover:-translate-y-0.5 hover:shadow-[0_22px_60px_rgba(37,99,235,0.42)]"
+                  >
+                    Upload All ({bulkFiles.length})
+                  </button>
+                )}
+
+                <GuidelineCard />
+              </div>
+            )
+          ) : isProcessing ? (
+            <UploadProcessingState
+              message={status === 'uploading' ? 'Uploading document...' : 'Running OCR + AI analysis...'}
+            />
+          ) : status === 'slow' ? (
+            <div data-testid="single-slow" className="flex min-h-[460px] flex-col items-center justify-center gap-4 rounded-[26px] border border-amber-300/25 bg-amber-400/8 px-5 py-16 text-center">
+              <div className="grid h-16 w-16 place-items-center rounded-full border border-amber-300/30 bg-amber-400/15">
+                <span className="h-6 w-6 animate-spin rounded-full border-2 border-transparent border-r-amber-200 border-t-amber-200" />
+              </div>
+              <div>
+                <p className="text-xl font-black text-white">Taking longer than usual</p>
+                <p className="mt-2 max-w-sm text-[14.7px] text-slate-300">{slowText}</p>
+              </div>
+              <div className="flex flex-wrap justify-center gap-3">
+                <button onClick={() => navigate('/documents')} className="rounded-2xl bg-gradient-to-r from-blue-600 to-cyan-500 px-5 py-3 text-[14.7px] font-black text-white">
+                  Open My Documents
+                </button>
+                <button onClick={handleReset} className="rounded-2xl border border-white/10 bg-white/[0.045] px-5 py-3 text-[14.7px] font-bold text-slate-300 hover:bg-blue-500/10">
+                  Upload another
+                </button>
+              </div>
+            </div>
+          ) : status === 'done' ? (
+            <div className="flex min-h-[460px] flex-col items-center justify-center gap-4 rounded-[26px] border border-emerald-300/18 bg-emerald-400/8 px-5 py-16 text-center">
+              <div className="grid h-20 w-20 place-items-center rounded-full border border-emerald-300/25 bg-emerald-400/15 text-[14.7px] font-black text-emerald-200 shadow-[0_0_45px_rgba(16,185,129,0.22)]">Done</div>
+              <div>
+                <p className="text-xl font-black text-white">Document processed</p>
+                <p className="mt-2 text-[14.7px] text-slate-500">Redirecting...</p>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-5">
+              <div>
+                <p className="mb-2 text-sm font-bold text-blue-300">Document Type</p>
+                <div className="grid grid-cols-2 gap-3">
+                  {DOCUMENT_TYPES.map((type) => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => setDocumentType(type)}
+                      disabled={isProcessing}
+                      className={`rounded-2xl border px-4 py-3 text-[14.7px] font-bold transition-all ${
+                        documentType === type
+                          ? 'border-blue-300/60 bg-blue-500/15 text-blue-100 shadow-[0_0_28px_rgba(37,99,235,0.24)]'
+                          : 'border-white/10 bg-white/[0.03] text-slate-400 hover:border-blue-300/30 hover:text-slate-200'
+                      }`}
+                    >
+                      {type}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <UploadCard onFileSelect={setFile} disabled={isProcessing} />
+
+              {file && !isProcessing && <LazyDocumentViewer file={file} heightClass="h-[420px]" />}
+
+              {error && (
+                <div className="flex items-start gap-3 rounded-2xl border border-rose-400/25 bg-rose-500/10 px-4 py-3 text-[14.7px] text-rose-200">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {file && (
+                <div className="flex flex-col gap-3 sm:flex-row">
+                  <button
+                    onClick={handleUpload}
+                    disabled={isProcessing}
+                    className="flex-1 rounded-2xl bg-gradient-to-r from-blue-600 to-cyan-500 px-5 py-3.5 text-[14.7px] font-black text-white shadow-[0_18px_45px_rgba(37,99,235,0.3)] transition-all hover:-translate-y-0.5 hover:shadow-[0_22px_60px_rgba(37,99,235,0.42)] disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Upload & Process
+                  </button>
+                  <button
+                    onClick={handleReset}
+                    className="rounded-2xl border border-white/10 bg-white/[0.045] px-6 py-3.5 text-[14.7px] font-bold text-slate-300 transition-all hover:border-blue-300/25 hover:bg-blue-500/10 hover:text-white"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
+
+              <GuidelineCard />
+            </div>
+          )}
+        </section>
+      </main>
+    </div>
+  )
+}

@@ -1,0 +1,73 @@
+import { useEffect, useRef } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useAuth } from '../hooks/useAuth'
+import { safeNext } from '../utils/safeNext'
+
+// Renders the Google Identity Services button (GSI script tag lives in
+// index.html) and wires its ID-token credential response to the backend's
+// POST /auth/google - shared by LoginPage and SignupPage so the GSI
+// init/poll logic exists exactly once. Without VITE_GOOGLE_CLIENT_ID set
+// (true in this dev environment - no real Google OAuth credentials exist
+// here) there's nothing to render; email/password auth is unaffected.
+export default function GoogleSignInButton({ onError }) {
+  const { loginWithGoogle } = useAuth()
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const containerRef = useRef(null)
+  // Ref so a new onError identity each render does not re-initialize the GSI button.
+  const onErrorRef = useRef(onError)
+  useEffect(() => {
+    onErrorRef.current = onError
+  })
+
+  useEffect(() => {
+    const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID
+    if (!clientId) return
+
+    // Loaded here, not in index.html, so a deployment without Google sign-in
+    // makes no third-party request on every page.
+    if (!document.querySelector('script[data-gsi]')) {
+      const s = document.createElement('script')
+      s.src = 'https://accounts.google.com/gsi/client'
+      s.async = true
+      s.defer = true
+      s.dataset.gsi = '1'
+      document.head.appendChild(s)
+    }
+
+    let cancelled = false
+    async function handleCredential({ credential }) {
+      try {
+        await loginWithGoogle(credential)
+        const next = searchParams.get('next')
+        navigate(safeNext(next), { replace: true })
+      } catch (err) {
+        onErrorRef.current?.(err)
+      }
+    }
+
+    // The GSI script tag is async/defer, so `window.google` may not exist
+    // yet on first render - poll briefly rather than requiring load order.
+    function tryRender() {
+      if (cancelled) return
+      if (!window.google?.accounts?.id || !containerRef.current) {
+        setTimeout(tryRender, 100)
+        return
+      }
+      window.google.accounts.id.initialize({ client_id: clientId, callback: handleCredential })
+      window.google.accounts.id.renderButton(containerRef.current, {
+        theme: 'filled_black',
+        size: 'large',
+        width: 320,
+        text: 'continue_with',
+      })
+    }
+    tryRender()
+
+    return () => {
+      cancelled = true
+    }
+  }, [loginWithGoogle, navigate, searchParams])
+
+  return <div ref={containerRef} className="flex justify-center" />
+}

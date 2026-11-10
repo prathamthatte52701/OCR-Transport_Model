@@ -1,0 +1,30 @@
+# paddlepaddle's Linux CPU wheels are not reliably published on plain PyPI; this index is required
+# for `pip install paddlepaddle` on Linux. Windows installs fine without it. Do not remove.
+--extra-index-url https://www.paddlepaddle.org.cn/packages/stable/cpu/
+
+# Runtime dependencies, exact versions (pinned from the working venv). Dev/test tools
+# live in requirements-dev.txt so they are not installed in production.
+fastapi==0.139.2
+uvicorn[standard]==0.51.0
+motor==3.7.1
+pymongo==4.18.2
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
+python-multipart==0.0.32
+PyJWT==2.15.1
+bcrypt==5.0.0
+slowapi==0.1.10
+loguru==0.7.3
+email-validator==2.3.0
+httpx==0.28.1
+groq==1.5.0
+Jinja2==3.1.6
+pymupdf==1.28.0
+Pillow==12.3.0
+openpyxl==3.1.5
+filelock==3.32.0
+paddleocr==3.7.0
+paddlepaddle==3.3.1
+psutil==7.2.2  # RSS memory measurement for bulk-upload leak testing (Feature 2)
+google-auth==2.56.2  # verifies Google ID tokens for OAuth login
+opencv-contrib-python==4.10.0.84  # the ONE OpenCV build: paddlex pins exactly this. Never add another opencv-* package - they all write into the same cv2/ dir and clobber each other

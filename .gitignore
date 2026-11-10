@@ -1,0 +1,74 @@
+# Secrets - never commit
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+venv/
+.venv/
+
+# Node
+node_modules/
+dist/
+*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Generated documents / test artifacts
+backend/exports/*.xlsx
+frontend/e2e/storage_state.json
+frontend/e2e/test_creds.json
+frontend/e2e/*.png
+admin/e2e/storage_state.json
+admin/e2e/test_creds.json
+admin/e2e/*.png
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# PaddleOCR model cache (large, machine-local, re-downloaded automatically)
+.paddlex/
+
+# Local test reports (contain real document numbers) - keep on disk, never push
+*_TEST_REPORT.md
+
+# Local export workbooks, their locks and temp swap files
+backend/exports/
+
+# Stray virtualenv / empty Node lockfile inside the Python backend
+backend/evnv/
+backend/package-lock.json
+
+# Test runner output and local tool state
+test-results/
+playwright-report/
+.playwright-mcp/
+.claude/settings.local.json
+coverage/
+.coverage
+*.tsbuildinfo
+*.tmp
+
+# Local tool config (preview/dev-server launcher), not part of the app
+.claude/
+
+frontend/e2e/
+admin/e2e/
+
+backend/logs/
+.run/
+
+# Test images (not shipped, kept local only)
+testing data/
+spec/*.tmp

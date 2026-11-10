@@ -1,0 +1,99 @@
+import api from './client'
+import { downloadBlob } from './download'
+import { uploadedFromParam } from '../utils/uploadRange'
+
+export function listDocuments(params) {
+  // `range` is a chip NAME (today|week|month|year); its start instant is computed here, at fetch
+  // time, in the user's local timezone. `dayKey` only exists to change the cache key at midnight.
+  // eslint-disable-next-line no-unused-vars
+  const { range, dayKey, ...rest } = params || {}
+  const uploadedFrom = range ? uploadedFromParam(range) : undefined
+  return api
+    .get('/documents', { params: { ...rest, ...(uploadedFrom && { uploadedFrom }) } })
+    .then((res) => res.data)
+}
+
+export function listDocumentsSummary() {
+  return api.get('/documents/summary').then((res) => res.data)
+}
+
+export function getDocument(id) {
+  return api.get(`/documents/${id}`).then((res) => res.data.document)
+}
+
+const UPLOAD_LIMIT_MESSAGE = 'Too many uploads. Please wait a few minutes and try again.'
+function uploadLimitMessage(err) {
+  if (err.response?.status === 429) err.userMessage = UPLOAD_LIMIT_MESSAGE
+  throw err
+}
+
+export function uploadDocument(file, documentType) {
+  const formData = new FormData()
+  formData.append('document', file)
+  formData.append('documentType', documentType)
+  return api
+    .post('/documents/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+    .then((res) => res.data.document, uploadLimitMessage)
+}
+
+export function bulkUploadDocuments(files, documentTypes) {
+  const formData = new FormData()
+  files.forEach((file) => formData.append('documents', file))
+  documentTypes.forEach((type) => formData.append('documentTypes', type))
+  return api
+    .post('/documents/bulk-upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
+    .then((res) => res.data.results, uploadLimitMessage)
+}
+
+export function correctDocument(id, field, value) {
+  return api.patch(`/documents/${id}/correct`, { field, value }).then((res) => res.data.document)
+}
+
+export function reprocessDocument(id) {
+  return api.post(`/documents/${id}/reprocess`).then((res) => res.data)
+}
+
+export function deleteDocument(id) {
+  return api.delete(`/documents/${id}`).then((res) => res.data)
+}
+
+// "File Delete" - permanently removes the stored original file (GridFS)
+// while leaving the document's extracted metadata untouched - distinct
+// from deleteDocument() ("Delete" - a full permanent delete of the whole
+// record). Irreversible.
+export function purgeDocumentFile(id) {
+  return api.post(`/documents/${id}/purge-file`).then((res) => res.data)
+}
+
+// Original file bytes for in-page viewing (needs the auth header, so it goes through the axios
+// instance). Unlike downloadDocument() this does not trigger a browser save.
+export function fetchDocumentFile(id) {
+  return api.get(`/documents/${id}/download`, { responseType: 'blob' }).then((res) => res.data)
+}
+
+export function downloadDocument(id, fallbackFilename) {
+  return downloadBlob(`/documents/${id}/download`, { fallbackFilename })
+}
+
+// "Download All" for one documents page - bundles every requested document's
+// original file into a single ZIP (page-scoped, same ids the caller already
+// has from the current page's list). Returns the response so the caller can
+// read the X-Download-Included/Skipped/Total headers for a summary toast.
+export function downloadAllDocuments(documentIds) {
+  return downloadBlob('/documents/download-all', {
+    method: 'post',
+    data: { documentIds },
+    fallbackFilename: 'documents.zip',
+  })
+}
+
+export function trainingStats() {
+  return api.get('/documents/training-stats').then((res) => res.data)
+}
+
+// Read-only timeline of the current user's own activity (auditlogs, scoped
+// server-side to the JWT's user id - no id param to pass here). params:
+// { page, limit } - defaults to 40/page server-side if omitted.
+export function myActivity(params) {
+  return api.get('/documents/my-activity', { params }).then((res) => res.data)
+}

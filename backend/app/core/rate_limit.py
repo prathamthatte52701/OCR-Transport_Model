@@ -1,0 +1,64 @@
+from fastapi import HTTPException, Request
+from limits import RateLimitItemPerHour, RateLimitItemPerMinute
+from limits.storage import MemoryStorage
+from limits.strategies import MovingWindowRateLimiter
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+from app.core.security import decode_token
+
+limiter = Limiter(key_func=get_remote_address)
+
+# Single-document uploads per IP. The limit is per IP and several staff share one office IP, so it
+# is well above what one person uploads; it only has to make scripted spam impractical.
+UPLOAD_LIMIT = "120/hour"
+
+
+def user_or_ip_key(request: Request) -> str:
+    """Per-account key for endpoints where the risk is a single authenticated
+    user hammering their own irreversible-delete action, not a shared IP -
+    slowapi's key_func must stay sync, so this decodes the JWT straight off
+    the Authorization header (same decode_token used by get_current_user)
+    rather than depending on the request's resolved CurrentUser. Falls back
+    to IP for the (should-never-happen) case of a missing/invalid token,
+    since the route's own auth dependency will 401 it anyway."""
+    auth_header = request.headers.get("authorization", "")
+    # the scheme is case-insensitive ("bearer <jwt>" authenticates too): key every spelling the
+    # same, or a caller could rotate "bEarer"/"BEARER" to multiply a per-account limit
+    scheme, _, token = auth_header.partition(" ")
+    if scheme.lower() == "bearer" and token:
+        payload = decode_token(token.strip())
+        if payload and payload.get("userId"):
+            return f"user:{payload['userId']}"
+    return get_remote_address(request)
+
+
+# Per-EMAIL login limiter, kept separate from slowapi's per-IP limiter (see
+# router.py) - the real brute-force guard, keyed on the account actually
+# being attacked so an office/shared-WiFi IP doesn't get punished for one
+# person's mistyped password. slowapi's key_func must be sync, and reading
+# the request body to extract the email requires an await, so this one is
+# implemented directly with the same `limits` library slowapi uses underneath.
+_email_storage = MemoryStorage()
+_email_limiter = MovingWindowRateLimiter(_email_storage)
+_email_login_limit = RateLimitItemPerMinute(20, 15)
+
+
+async def enforce_login_email_limit(request: Request, email: str) -> None:
+    key = email.strip().lower() if email and email.strip() else get_remote_address(request)
+    if not _email_limiter.hit(_email_login_limit, key):
+        raise HTTPException(
+            status_code=429,
+            detail="Too many login attempts for this account. Please try again in a few minutes.",
+        )
+
+
+# Password-reset-request per-email limiter: its OWN storage and limiter, so spamming reset
+# requests for someone's address can never eat that person's login attempts. Returns a bool
+# (never raises) - the public route answers identically either way.
+_reset_limiter = MovingWindowRateLimiter(MemoryStorage())
+_reset_email_limit = RateLimitItemPerHour(3)
+
+
+def allow_password_reset_for_email(email: str) -> bool:
+    return _reset_limiter.hit(_reset_email_limit, f"pwreset:{email.strip().lower()}")

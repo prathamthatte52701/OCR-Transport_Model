@@ -1,0 +1,495 @@
+import { useEffect, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { toast } from 'sonner'
+import { Upload } from 'lucide-react'
+import { useDocumentsList } from '../hooks/useDocumentsQueries'
+import {
+  useBulkSaveDocumentsMutation,
+  useDownloadAllDocumentsMutation,
+  useNewExcelFileMutation,
+} from '../hooks/useDocumentMutations'
+import DocumentList from '../components/DocumentList'
+import PageBackground from '../components/PageBackground'
+import { confirmAction, promptText } from '../store/dialogStore'
+import BackButton from '../components/BackButton'
+import { UPLOAD_RANGES } from '../utils/uploadRange'
+
+function DocumentsSkeleton() {
+  return (
+    <div className="grid gap-5 @3xl:grid-cols-2 @5xl:grid-cols-3">
+      {[0, 1, 2, 3, 4, 5].map((i) => (
+        <div key={i} className="h-[250px] animate-pulse rounded-3xl border border-blue-300/10 bg-slate-900/60 p-5">
+          <div className="flex gap-4">
+            <div className="h-20 w-20 rounded-2xl bg-blue-500/10" />
+            <div className="flex-1 space-y-3">
+              <div className="h-4 w-2/3 rounded-full bg-slate-700/70" />
+              <div className="h-3 w-4/5 rounded-full bg-slate-800" />
+              <div className="h-3 w-1/2 rounded-full bg-slate-800" />
+            </div>
+          </div>
+          <div className="mt-6 grid grid-cols-2 gap-3">
+            <div className="h-9 rounded-xl bg-slate-800/70" />
+            <div className="h-9 rounded-xl bg-slate-800/70" />
+          </div>
+          <div className="mt-4 h-10 rounded-xl bg-slate-800/70" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function DocumentsError({ message, onRetry }) {
+  return (
+    <div className="rounded-[28px] border border-rose-400/25 bg-rose-500/10 p-8 text-center shadow-[0_24px_80px_rgba(127,29,29,0.16)]">
+      <div className="mx-auto grid h-14 w-14 place-items-center rounded-2xl border border-rose-300/25 bg-rose-400/10 text-[14.7px] font-black text-rose-200">ERR</div>
+      <p className="mt-4 text-lg font-black text-white">{message}</p>
+      <button
+        onClick={onRetry}
+        className="mt-5 rounded-2xl border border-white/10 bg-white/[0.045] px-5 py-3 text-[14.7px] font-bold text-slate-200 transition-colors hover:border-rose-300/30 hover:bg-rose-500/10"
+      >
+        Try Again
+      </button>
+    </div>
+  )
+}
+
+const PAGE_SIZE = 30
+const DOCUMENT_TYPES = ['Tax Invoice', 'Delivery Challan']
+const ALL_TYPES = 'all'
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+const MONTH_PARAM_RE = /^(20\d{2}|2100)-(0[1-9]|1[0-2])$/
+const CURRENT_YEAR = new Date().getFullYear()
+const YEAR_OPTIONS = Array.from({ length: 7 }, (_, i) => CURRENT_YEAR + 1 - i)
+const selectClass = 'rounded-2xl border border-white/10 bg-slate-900 px-3 py-2 text-[13.6px] font-bold text-slate-200 focus:border-blue-300/40 focus:outline-none'
+const DATE_RANGES = UPLOAD_RANGES
+const RANGE_LABELS = Object.fromEntries(UPLOAD_RANGES.map((r) => [r.value, r.label.toLowerCase()]))
+
+// Today's local date, re-read every minute and when the tab becomes visible again, so a tab
+// left open past midnight refetches "Today" instead of showing yesterday's result.
+function useLocalDay() {
+  const [day, setDay] = useState(() => new Date().toDateString())
+  useEffect(() => {
+    const tick = () => setDay(new Date().toDateString())
+    const id = setInterval(tick, 60000)
+    document.addEventListener('visibilitychange', tick)
+    return () => {
+      clearInterval(id)
+      document.removeEventListener('visibilitychange', tick)
+    }
+  }, [])
+  return day
+}
+
+export default function DocumentsPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const numberQuery = searchParams.get('number') || ''
+  const dateQuery = searchParams.get('date') || ''
+  const monthRaw = searchParams.get('month') || ''
+  const monthQuery = monthRaw === 'none' || MONTH_PARAM_RE.test(monthRaw) ? monthRaw : ''
+  const isSearching = Boolean(numberQuery || dateQuery || monthQuery)
+  const typeParam = searchParams.get('type')
+  const selectedType = typeParam === ALL_TYPES || DOCUMENT_TYPES.includes(typeParam) ? typeParam : DOCUMENT_TYPES[0]
+  const monthNumber = monthQuery && monthQuery !== 'none' ? monthQuery.slice(5) : ''
+  const [yearPick, setYearPick] = useState(monthQuery && monthQuery !== 'none' ? Number(monthQuery.slice(0, 4)) : CURRENT_YEAR)
+  const monthLabel = monthQuery === 'none' ? 'no date found' : monthQuery ? `month ${MONTH_NAMES[Number(monthNumber) - 1]} ${monthQuery.slice(0, 4)}` : ''
+  const rangeParam = searchParams.get('range') || ''
+  const selectedRange = DATE_RANGES.some((r) => r.value === rangeParam) ? rangeParam : ''
+  const rangeLabel = selectedRange ? `uploaded ${RANGE_LABELS[selectedRange]}` : ''
+  const filterParts = [numberQuery && `number "${numberQuery}"`, dateQuery && `date ${dateQuery}`, monthLabel, rangeLabel].filter(Boolean)
+
+  const dayKey = useLocalDay()
+  const [page, setPage] = useState(1)
+  const newExcelFileMutation = useNewExcelFileMutation()
+  const bulkSaveMutation = useBulkSaveDocumentsMutation()
+  const downloadAllMutation = useDownloadAllDocumentsMutation()
+
+  // A new/changed search, group tab, or date range should always land on page 1.
+  const prevSearchKeyRef = useRef(`${numberQuery}|${dateQuery}|${selectedType}|${selectedRange}|${monthQuery}`)
+  useEffect(() => {
+    const searchKey = `${numberQuery}|${dateQuery}|${selectedType}|${selectedRange}|${monthQuery}`
+    if (searchKey !== prevSearchKeyRef.current) {
+      prevSearchKeyRef.current = searchKey
+      setPage(1)
+    }
+  }, [numberQuery, dateQuery, selectedType, selectedRange, monthQuery])
+
+  const { data, isLoading, isError, error, refetch } = useDocumentsList({
+    page,
+    limit: PAGE_SIZE,
+    ...(selectedType !== ALL_TYPES && { documentType: selectedType }),
+    ...(numberQuery && { number: numberQuery }),
+    ...(dateQuery && { date: dateQuery }),
+    ...(selectedRange && { range: selectedRange, dayKey }),
+    ...(monthQuery && { month: monthQuery }),
+  })
+
+  const documents = data?.documents || []
+  const totalPages = data?.totalPages || 1
+  const totalDocuments = data?.totalDocuments || 0
+
+  function clearSearch() {
+    const next = new URLSearchParams()
+    if (searchParams.get('type')) next.set('type', searchParams.get('type'))
+    // The chip is its own visible control: keep it while clearing a search/month, drop it when it is the only filter.
+    if (isSearching && searchParams.get('range')) next.set('range', searchParams.get('range'))
+    setSearchParams(next)
+  }
+
+  function selectType(type) {
+    const next = new URLSearchParams(searchParams)
+    next.set('type', type)
+    setSearchParams(next)
+  }
+
+  function selectRange(range) {
+    const next = new URLSearchParams(searchParams)
+    if (range) next.set('range', range)
+    else next.delete('range')
+    if (range) next.delete('month') // range (by upload time) and month (by document date) are exclusive
+    setSearchParams(next)
+  }
+
+  function selectMonth(month) {
+    const next = new URLSearchParams(searchParams)
+    if (month) {
+      next.set('month', month)
+      next.delete('range')
+      next.delete('date')
+    } else {
+      next.delete('month')
+    }
+    setSearchParams(next)
+  }
+
+  function pickMonthNumber(mm) {
+    selectMonth(mm ? `${yearPick}-${mm}` : '')
+  }
+
+  function pickYear(year) {
+    setYearPick(year)
+    if (monthNumber) selectMonth(`${year}-${monthNumber}`)
+  }
+
+  // Scoped strictly to `documents` - the already-paginated (30/page) result
+  // for the CURRENT page/type/search, never the user's whole dataset. Skips
+  // the per-document "already saved, are you sure?" popup on purpose (every
+  // doc gets re-saved regardless of `exported`, same as an individual Save
+  // Again) but still gates behind one page-level confirmation so a whole
+  // page of duplicate rows is never a surprise.
+  //
+  // Only documents whose OCR finished (uploadStatus === 'processed') are sent: the server
+  // rejects the rest anyway ("not processed yet"), which used to show up as a couple of
+  // failures on a perfectly normal page.
+  const saveAllBusyRef = useRef(false)
+  async function handleSaveAll() {
+    if (saveAllBusyRef.current || bulkSaveMutation.isPending) return // ignore re-entry / double clicks
+    const processed = documents.filter((d) => d.uploadStatus === 'processed')
+    const skipped = documents.length - processed.length
+    if (processed.length === 0) {
+      toast.info('Nothing to save - none of the documents on this page are processed yet.')
+      return
+    }
+    saveAllBusyRef.current = true
+    try {
+      const ok = await confirmAction({
+        title: 'Save all documents on this page?',
+        message: `${processed.length} will be saved${skipped > 0 ? `, ${skipped} skipped (not processed yet)` : ''}. Documents already in Excel will have their old row replaced. Continue?`,
+        confirmLabel: 'Yes, Save All',
+      })
+      if (!ok) return
+      reportSaveAll(await bulkSaveMutation.mutateAsync(processed.map((d) => d._id)))
+    } catch (err) {
+      if (!err.response) {
+        // timeout / network drop: the server may have saved some or all rows already, so do not
+        // retry on its own and warn instead of claiming failure (the list refetches by itself)
+        toast.warning('Save may have partly completed. Check Export History before saving again.')
+      } else {
+        toast.error(err.userMessage || 'Could not save documents. Please try again.')
+      }
+    } finally {
+      saveAllBusyRef.current = false
+    }
+  }
+
+  function reportSaveAll(result) {
+    const saved = result.succeeded.length
+    if (result.cancelled) {
+      toast.info(`No workbook name given - ${saved} saved, the rest were not saved.`)
+      return
+    }
+    if (result.blocked) {
+      toast.error(result.blocked.message || 'Could not create an Excel workbook. Please try again.')
+      return
+    }
+    const failed = result.failed
+    if (result.staleWarnings?.length) {
+      const more = result.staleWarnings.length - 1
+      toast.warning(`${result.staleWarnings[0].message}${more > 0 ? ` (+${more} more documents need a second look)` : ''}`)
+    }
+    const replacedNote = result.replaced > 0 ? ` (${result.replaced} old ${result.replaced === 1 ? 'row' : 'rows'} replaced)` : ''
+    const dateFallback = result.dateFallback.length
+    if (failed.length === 0 && dateFallback === 0) {
+      toast.success(`${saved} saved successfully.${replacedNote}`)
+      return
+    }
+    const reasons = new Map()
+    failed.forEach((f) => reasons.set(f.reason, (reasons.get(f.reason) || 0) + 1))
+    const parts = [`${saved} saved${replacedNote}`]
+    if (failed.length > 0) {
+      parts.push(`${failed.length} failed - ${[...reasons].map(([reason, n]) => `${reason} (${n})`).join('; ')}`)
+    }
+    if (dateFallback > 0) {
+      parts.push(`${dateFallback} had no usable date and went to the sheet of the save date`)
+    }
+    ;(failed.length > 0 ? toast.error : toast.warning)(`${parts.join('. ')}.`)
+  }
+
+  // Scoped strictly to `documents` - same page-scoping contract as Save
+  // All. Documents whose original file was already hard-deleted (purge
+  // file) are silently skipped server-side and reported back via response
+  // headers, not an error - no confirmation needed here since downloading
+  // is non-destructive, only Save All (which writes duplicate rows) gates
+  // behind a popup.
+  const downloadAllBusyRef = useRef(false)
+  async function handleDownloadAll() {
+    if (documents.length === 0 || downloadAllBusyRef.current) return
+    downloadAllBusyRef.current = true
+    try {
+      const res = await downloadAllMutation.mutateAsync(documents.map((d) => d._id))
+      const included = Number(res.headers?.['x-download-included'] ?? 0)
+      const skipped = Number(res.headers?.['x-download-skipped'] ?? 0)
+      const total = Number(res.headers?.['x-download-total'] ?? documents.length)
+      if (skipped === 0) {
+        toast.success(`${included} of ${total} file${total !== 1 ? 's' : ''} downloaded.`)
+      } else if (included === 0) {
+        toast.error(`0 of ${total} downloaded - all files were previously removed (File Delete).`)
+      } else {
+        toast.warning(
+          `${included} of ${total} files downloaded. ${skipped} document${skipped !== 1 ? 's were' : ' was'} skipped because ${skipped !== 1 ? 'their' : 'its'} original file was previously removed (File Delete).`
+        )
+      }
+    } catch (err) {
+      toast.error(err.userMessage || 'Could not download documents. Please try again.')
+    } finally {
+      downloadAllBusyRef.current = false
+    }
+  }
+
+  async function handleStartNewExcelFile() {
+    const filename = await promptText({
+      title: 'Start a new Excel file',
+      message: 'Name for the new Excel export file:',
+      placeholder: 'e.g. Bills_2026',
+    })
+    if (!filename) return
+    try {
+      const result = await newExcelFileMutation.mutateAsync(filename)
+      toast.success(`New workbook "${result.filename}.xlsx" is ready.`)
+    } catch (err) {
+      toast.error(err.userMessage || 'Could not start a new Excel file. Please try again.')
+    }
+  }
+
+  return (
+    <div className="relative min-h-full overflow-hidden bg-[#020817]">
+      <PageBackground variant="dots" />
+
+      <main className="relative mx-auto max-w-[1440px] px-4 py-8 sm:px-6 lg:px-10 lg:py-10">
+
+        <BackButton fallback="/" />
+        <div className="mb-7 flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h1 className="text-3xl font-black tracking-[-0.03em] text-white sm:text-4xl">My Documents</h1>
+            <p className="mt-2 flex items-center gap-2 text-[14.7px] font-medium text-slate-500">
+              <span className="h-2 w-2 rounded-full bg-blue-400 shadow-[0_0_16px_rgba(96,165,250,0.85)]" />
+              {isLoading ? 'Loading documents...' : `${totalDocuments} document${totalDocuments !== 1 ? 's' : ''}`}
+            </p>
+            {isSearching && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-[13.6px] text-slate-400">
+                <span>
+                  Filtered by {filterParts.join(' and ')}
+                </span>
+                <button
+                  onClick={clearSearch}
+                  className="rounded-full border border-white/10 bg-white/[0.045] px-3 py-1 text-[12.6px] font-bold text-blue-300 transition-colors hover:border-blue-300/30 hover:bg-blue-500/10"
+                >
+                  Clear Search
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <Link
+              to="/documents/view-all"
+              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-white/10 bg-white/[0.045] px-5 py-3 text-[14.7px] font-bold text-slate-200 no-underline transition-colors hover:border-blue-300/30 hover:bg-blue-500/10"
+            >
+              View All Details
+            </Link>
+            <button
+              onClick={handleStartNewExcelFile}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-blue-300/20 bg-slate-900/60 px-5 py-3 text-[14.7px] font-bold text-blue-200 transition-all hover:border-blue-300/45 hover:bg-blue-500/10"
+            >
+              Start New Excel File
+            </button>
+            <Link
+              to="/upload"
+              className="inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-blue-600 to-blue-500 px-5 py-3 text-[14.7px] font-black text-white no-underline shadow-[0_18px_45px_rgba(37,99,235,0.34)] transition-all hover:-translate-y-0.5 hover:shadow-[0_22px_60px_rgba(37,99,235,0.45)] focus:outline-none focus:ring-2 focus:ring-blue-300/60"
+            >
+              <Upload className="h-4 w-4" strokeWidth={1.8} />
+              Upload New
+            </Link>
+          </div>
+        </div>
+
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex gap-2">
+            {[...DOCUMENT_TYPES, ALL_TYPES].map((type) => (
+              <button
+                key={type}
+                type="button"
+                onClick={() => selectType(type)}
+                className={`flex-1 rounded-2xl border px-4 py-2.5 text-[13.6px] font-bold transition-all sm:flex-none ${
+                  selectedType === type
+                    ? 'border-blue-300/50 bg-blue-500/15 text-blue-100'
+                    : 'border-white/10 bg-white/[0.03] text-slate-400 hover:border-blue-300/25 hover:text-slate-200'
+                }`}
+              >
+                {type === ALL_TYPES ? 'All' : type}
+              </button>
+            ))}
+          </div>
+          <div className="inline-flex items-center gap-2.5 rounded-2xl border border-blue-300/25 bg-blue-500/10 px-4 py-2 shadow-[0_0_28px_rgba(37,99,235,0.15)]">
+            <span className="text-2xl font-black leading-none text-white">{isLoading ? '-' : totalDocuments}</span>
+            <span className="text-[12.6px] font-bold uppercase tracking-wide text-blue-300">
+              {selectedType === ALL_TYPES ? `document${totalDocuments !== 1 ? 's' : ''}` : `${selectedType}${totalDocuments !== 1 ? 's' : ''}`} total
+            </span>
+          </div>
+        </div>
+
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <span className="text-[12.6px] font-bold uppercase tracking-wide text-slate-500">Doc by date</span>
+          <select aria-label="Month" value={monthNumber} onChange={(e) => pickMonthNumber(e.target.value)} className={selectClass}>
+            <option value="">All months</option>
+            {MONTH_NAMES.map((name, i) => (
+              <option key={name} value={String(i + 1).padStart(2, '0')}>{name}</option>
+            ))}
+          </select>
+          <select aria-label="Year" value={yearPick} onChange={(e) => pickYear(Number(e.target.value))} className={selectClass}>
+            {YEAR_OPTIONS.map((y) => (
+              <option key={y} value={y}>{y}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => selectMonth(monthQuery === 'none' ? '' : 'none')}
+            aria-pressed={monthQuery === 'none'}
+            className={`rounded-2xl border px-4 py-2 text-[13.6px] font-bold transition-all ${
+              monthQuery === 'none'
+                ? 'border-blue-300/50 bg-blue-500/15 text-blue-100'
+                : 'border-white/10 bg-white/[0.03] text-slate-400 hover:border-blue-300/25 hover:text-slate-200'
+            }`}
+          >
+            No date found
+          </button>
+        </div>
+
+        <div className="mb-6 flex flex-wrap items-center gap-2">
+          <span className="text-[12.6px] font-bold uppercase tracking-wide text-slate-500">Upload by date</span>
+          <button
+            type="button"
+            onClick={() => selectRange('')}
+            className={`rounded-2xl border px-4 py-2 text-[13.6px] font-bold transition-all ${
+              !selectedRange
+                ? 'border-blue-300/50 bg-blue-500/15 text-blue-100'
+                : 'border-white/10 bg-white/[0.03] text-slate-400 hover:border-blue-300/25 hover:text-slate-200'
+            }`}
+          >
+            All
+          </button>
+          {DATE_RANGES.map(({ value, label }) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => selectRange(value)}
+              className={`rounded-2xl border px-4 py-2 text-[13.6px] font-bold transition-all ${
+                selectedRange === value
+                  ? 'border-blue-300/50 bg-blue-500/15 text-blue-100'
+                  : 'border-white/10 bg-white/[0.03] text-slate-400 hover:border-blue-300/25 hover:text-slate-200'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {isLoading ? (
+          <DocumentsSkeleton />
+        ) : isError ? (
+          <DocumentsError message={error?.userMessage || 'Could not load your documents. Please try again.'} onRetry={refetch} />
+        ) : (isSearching || selectedRange) && documents.length === 0 ? (
+          <div className="rounded-[30px] border border-blue-300/12 bg-slate-900/62 p-10 text-center shadow-[0_28px_100px_rgba(2,8,23,0.35)] backdrop-blur-xl">
+            <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl border border-blue-300/18 bg-blue-500/10 text-[14.7px] font-black text-blue-200 shadow-[0_0_42px_rgba(37,99,235,0.2)]">N/A</div>
+            <h2 className="mt-5 text-2xl font-black text-white">No results found</h2>
+            <p className="mx-auto mt-2 max-w-md text-[14.7px] leading-6 text-slate-500">
+              No documents match {filterParts.join(' and ')}.
+            </p>
+            <button
+              onClick={clearSearch}
+              className="mt-6 inline-flex rounded-2xl border border-white/10 bg-white/[0.045] px-5 py-3 text-[14.7px] font-bold text-slate-200 transition-colors hover:border-blue-300/30 hover:bg-blue-500/10"
+            >
+              Clear Search
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="mb-5 flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                onClick={handleDownloadAll}
+                disabled={documents.length === 0 || downloadAllMutation.isPending}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-blue-300/25 bg-blue-500/10 px-5 py-2.5 text-[13.6px] font-black text-blue-200 transition-all hover:border-blue-300/45 hover:bg-blue-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {downloadAllMutation.isPending ? 'Preparing...' : `Download All (${documents.length} on this page)`}
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveAll}
+                disabled={documents.length === 0 || bulkSaveMutation.isPending}
+                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-300/25 bg-emerald-500/10 px-5 py-2.5 text-[13.6px] font-black text-emerald-200 transition-all hover:border-emerald-300/45 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {bulkSaveMutation.isPending ? `Saving ${documents.length}...` : `Save All (${documents.length} on this page)`}
+              </button>
+            </div>
+            {totalPages > 1 && (
+              <p className="mb-3 text-right text-[12.6px] text-slate-500">
+                Save All and Download All apply to this page only (page {page} of {totalPages})
+              </p>
+            )}
+            <DocumentList documents={documents} startIndex={(page - 1) * PAGE_SIZE} />
+            {totalPages > 1 && (
+              <div className="mt-8 flex items-center justify-center gap-4">
+                <button
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page <= 1}
+                  className="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-white/[0.045] px-5 py-3 text-[14.7px] font-bold text-slate-200 transition-colors hover:border-blue-300/30 hover:bg-blue-500/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-white/10 disabled:hover:bg-white/[0.045]"
+                >
+                  Previous
+                </button>
+                <span className="text-[14.7px] font-bold text-slate-400">
+                  Page {page} of {totalPages}
+                </span>
+                <button
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page >= totalPages}
+                  className="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-white/[0.045] px-5 py-3 text-[14.7px] font-bold text-slate-200 transition-colors hover:border-blue-300/30 hover:bg-blue-500/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-white/10 disabled:hover:bg-white/[0.045]"
+                >
+                  Next
+                </button>
+              </div>
+            )}
+          </>
+        )}
+      </main>
+    </div>
+  )
+}

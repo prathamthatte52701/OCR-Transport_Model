@@ -1,0 +1,1235 @@
+import asyncio
+import os
+import re
+import tempfile
+import time
+import zipfile
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime, timedelta
+from pathlib import PurePosixPath
+from typing import Any, Literal
+from urllib.parse import quote
+from uuid import uuid4
+
+from bson import ObjectId
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
+from fastapi.responses import Response, StreamingResponse
+from loguru import logger
+from pymongo import ReturnDocument
+from pymongo.collation import Collation
+from starlette.background import BackgroundTask
+
+from app.core.audit_log import log_action, safe_log_action
+from app.core.database import get_database
+from app.core.image_limits import ImageTooLarge, check_upload
+from app.core.object_id import PyObjectId
+from app.core.orphaned_files import record_orphaned_file
+from app.core.rate_limit import UPLOAD_LIMIT, limiter
+from app.core.timezones import ist_midnight_utc, now_ist
+from app.features.auth.dependencies import CurrentUser, get_current_user
+from app.features.documents.correction_rules import (
+    CHANGED_MSG,
+    apply_correction,
+    check_request,
+    validate_correction,
+)
+from app.features.documents.gridfs_service import delete_file, download_buffer, upload_buffer
+from app.features.documents.schemas import (
+    CorrectRequest,
+    DeleteResponse,
+    DownloadAllRequest,
+    MessageResponse,
+    PurgeFileResponse,
+)
+from app.features.ocr.extraction import extraction_reset_ops
+from app.features.ocr.pipeline import process_document
+from app.features.ocr.preprocessing import get_pdf_page_count
+from app.features.ocr.providers.errors import PROCESSING_ERROR, user_message
+
+MONTH_RE = re.compile(r"^(20\d{2}|2100)-(0[1-9]|1[0-2])$")
+
+router = APIRouter()
+
+DOCUMENT_TYPES = {"Tax Invoice", "Delivery Challan"}
+# Legacy rolling windows from "now" (?range=), kept for old callers. The My Documents chips send
+# a calendar-based ?uploadedFrom= (start of day/week/month/year in the USER's timezone) instead.
+RANGE_DAYS = {"today": 1, "week": 7, "month": 30, "year": 365}
+MAX_PAGE_SIZE = 100
+REPROCESS_STUCK_AFTER = timedelta(minutes=10)
+MAX_PAGE_NUMBER = 100_000
+MAX_FILE_SIZE = 5 * 1024 * 1024
+MAX_BULK_FILES = 10
+MAX_DOWNLOAD_ALL_IDS = 50
+MAX_DOWNLOAD_ALL_BYTES = 150 * 1024 * 1024
+# A running download-all holds its user's slot at most this long; an older slot is treated as
+# free, so a leaked slot (cancelled task, bug) heals itself instead of blocking the user forever.
+DOWNLOAD_SLOT_TIMEOUT_SECONDS = 10 * 60
+# user id -> time.monotonic() when the slot was taken. In-process only (single worker); with
+# multiple workers the limit would be per process.
+_active_downloads: dict[ObjectId, float] = {}
+ALLOWED_MIME_TYPES = {"image/jpeg", "image/jpg", "image/png", "application/pdf"}
+
+
+def _detect_mime_type(buffer: bytes) -> str | None:
+    if len(buffer) < 4:
+        return None
+    if buffer[0:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if buffer[0:4] == b"\x89PNG":
+        return "image/png"
+    if buffer[0:4] == b"%PDF":
+        return "application/pdf"
+    return None
+
+
+def _mime_matches_upload(declared: str, detected: str | None) -> bool:
+    if not detected:
+        return False
+    if declared == detected:
+        return True
+    return declared == "image/jpg" and detected == "image/jpeg"
+
+
+def _name_from_original_filename(original_name: str) -> str:
+    return PurePosixPath(original_name).stem or original_name
+
+
+_UNSAFE_HEADER_CHARS_RE = re.compile(r'[\x00-\x1f\x7f"\\]')
+
+
+def _sanitize_content_disposition_filename(filename: str) -> str:
+    """The uploader's original filename is client-supplied and gets
+    interpolated into a Content-Disposition response header - a filename
+    containing a `"` or control/CR-LF characters could break out of the
+    quoted-string value or corrupt the header. Stripping those characters
+    (rather than rejecting the upload) keeps every legitimate filename
+    working while making header injection structurally impossible here."""
+    cleaned = _UNSAFE_HEADER_CHARS_RE.sub("", filename)
+    return cleaned or "document"
+
+
+def _content_disposition(filename: str) -> str:
+    """Attachment header safe for ANY uploaded name. A non-latin-1 character
+    (e.g. a Hindi/Chinese filename) in the plain filename="..." value made
+    Starlette fail to encode the header, so the file uploaded fine but its
+    download returned 500. Send an ASCII fallback plus the RFC 5987
+    filename* form carrying the real UTF-8 name."""
+    safe = _sanitize_content_disposition_filename(filename)
+    ascii_name = safe.encode("ascii", "replace").decode("ascii").replace("?", "_")
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(safe, safe='')}"
+
+
+_UNSAFE_ZIP_ENTRY_CHARS_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f\x7f]')
+_EXTENSION_BY_MIME = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "application/pdf": ".pdf",
+}
+
+
+def _zip_entry_name(doc: dict, seen: dict[str, int]) -> str:
+    """Builds a distinguishable in-archive filename from the document's own
+    identifying number/date - e.g. "TI-482910_15-03-2026.pdf" - rather than
+    a generic id-based name, so extracted files are recognizable at a
+    glance. `seen` dedupes within one zip (same number+date could repeat
+    across genuinely different documents)."""
+    if doc["documentType"] == "Tax Invoice":
+        parts = [p for p in (doc.get("taxInvoiceNo"), doc.get("referenceNo")) if p]
+        base = "-".join(parts) if parts else str(doc["_id"])
+    else:
+        base = doc.get("number") or str(doc["_id"])
+    if doc.get("date"):
+        base = f"{base}_{doc['date'].replace('/', '-')}"
+
+    ext = PurePosixPath(doc.get("originalFilename") or "").suffix
+    if not ext:
+        ext = _EXTENSION_BY_MIME.get(doc.get("mimeType") or "", "")
+
+    safe_base = _UNSAFE_ZIP_ENTRY_CHARS_RE.sub("_", base).strip() or str(doc["_id"])
+    count = seen.get(safe_base, 0)
+    seen[safe_base] = count + 1
+    suffix = f" ({count})" if count else ""
+    return f"{safe_base}{suffix}{ext}"
+
+
+FILE_TOO_BIG_MESSAGE = "File size must be 5 MB or less."
+READ_CHUNK = 64 * 1024
+
+
+async def read_limited(upload: UploadFile, limit: int = MAX_FILE_SIZE) -> bytes | None:
+    """Reads an upload in chunks and stops as soon as it exceeds `limit`,
+    returning None (caller reports "too big") instead of buffering an
+    arbitrarily large body in memory first."""
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await upload.read(READ_CHUNK):
+        total += len(chunk)
+        if total > limit:
+            return None
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _validate_and_store(
+    buffer: bytes, mime_type: str, original_name: str, document_type: str, user_id: ObjectId
+) -> dict:
+    """Raises HTTPException on validation failure; otherwise creates the
+    Document row and returns it (uploadStatus 'uploaded', not yet processed)."""
+    if document_type not in DOCUMENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Please choose a document type - Tax Invoice or Delivery Challan - "
+                "before uploading."
+            ),
+        )
+    if len(buffer) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail="File size must be 5 MB or less.")
+    if mime_type not in ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            status_code=400, detail="Only JPG, JPEG, PNG, and PDF files are allowed."
+        )
+
+    detected = _detect_mime_type(buffer)
+    if not _mime_matches_upload(mime_type, detected):
+        raise HTTPException(
+            status_code=400, detail="File content does not match the selected file type."
+        )
+
+    if mime_type == "application/pdf":
+        pages = await get_pdf_page_count(buffer)
+        if not pages:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Could not read this PDF. Please upload a valid PDF or convert it to JPG/PNG."
+                ),
+            )
+        if pages > 4:
+            raise HTTPException(status_code=400, detail="PDF must be 4 pages or less.")
+
+    # Pixel-size check BEFORE anything is stored: a tiny file can decode to GBs of RAM.
+    try:
+        await check_upload(buffer, detected or mime_type)
+    except ImageTooLarge as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    db = get_database()
+    auto_name = _name_from_original_filename(original_name)
+    grid_fs_file_id = await upload_buffer(buffer, original_name, mime_type)
+
+    now = datetime.now(UTC)
+    try:
+        insert_result = await db.documents.insert_one(
+            {
+                "userId": user_id,
+                "autoName": auto_name,
+                "originalFilename": original_name,
+                "mimeType": mime_type,
+                "size": len(buffer),
+                "gridFsFileId": grid_fs_file_id,
+                "uploadStatus": "uploaded",
+                # identity of the processing job that owns this document: only that job may write
+                "processingRunId": uuid4().hex,
+                "documentType": document_type,
+                "taxInvoiceNo": None,
+                "referenceNo": None,
+                "number": None,
+                "date": None,
+                "taxInvoiceNoAutoCorrected": None,
+                "numberAutoCorrected": None,
+                "dateAutoCorrected": None,
+                "filePurged": False,
+                "filePurgedAt": None,
+                "edited": False,
+                "exported": False,
+                "isDeleted": False,
+                "createdAt": now,
+                "updatedAt": now,
+            }
+        )
+    except Exception:
+        # The file is stored but no document points at it: remove it (best effort).
+        try:
+            await delete_file(grid_fs_file_id)
+        except Exception as del_exc:  # noqa: BLE001
+            await record_orphaned_file(
+                grid_fs_file_id, None, user_id, "upload_insert_failed", del_exc
+            )
+        raise
+    doc = await db.documents.find_one({"_id": insert_result.inserted_id})
+    assert doc is not None
+    await safe_log_action(
+        user_id,
+        "document_uploaded",
+        {
+            "documentId": str(doc["_id"]),
+            "filename": original_name,
+            "documentType": document_type,
+        },
+    )
+    return doc
+
+
+@router.post("/upload", status_code=201)
+@limiter.limit(UPLOAD_LIMIT)
+async def upload_document(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    document: UploadFile = File(...),
+    document_type: str = Form(..., alias="documentType"),
+    current_user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Rate limited - every upload triggers real PaddleOCR + Groq work
+    serialized through a single process-wide lock (see ocr/pipeline.py), so
+    unthrottled uploads are a DoS vector against every OTHER user's queue,
+    not just this account's own storage. UPLOAD_LIMIT (per IP, shared by
+    several staff) is well above genuine single-document use while making
+    scripted spam impractical."""
+    if not document:
+        raise HTTPException(status_code=400, detail="No file uploaded.")
+    buffer = await read_limited(document)
+    if buffer is None:
+        raise HTTPException(status_code=400, detail=FILE_TOO_BIG_MESSAGE)
+    doc = await _validate_and_store(
+        buffer,
+        document.content_type or "",
+        document.filename or "upload",
+        document_type,
+        current_user.id,
+    )
+    background_tasks.add_task(
+        process_document,
+        doc["_id"],
+        buffer,
+        doc["mimeType"],
+        doc["documentType"],
+        doc["processingRunId"],
+    )
+    return {"document": _serialize_document(doc)}
+
+
+@router.post("/bulk-upload", status_code=201)
+@limiter.limit("30/hour")
+async def bulk_upload_documents(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    documents: list[UploadFile] = File(...),
+    document_types: list[str] = Form(..., alias="documentTypes"),
+    current_user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    if not documents:
+        raise HTTPException(status_code=400, detail="No files uploaded.")
+    if len(documents) > MAX_BULK_FILES:
+        raise HTTPException(
+            status_code=400, detail=f"You can upload a maximum of {MAX_BULK_FILES} files at once."
+        )
+    if len(document_types) != len(documents):
+        raise HTTPException(status_code=400, detail="Each file needs a document type.")
+
+    results: list[dict[str, object]] = []
+    created: list[tuple[ObjectId, bytes, str, str, str]] = []
+    for upload_file, doc_type in zip(documents, document_types, strict=True):
+        buffer = await read_limited(upload_file)
+        if buffer is None:
+            results.append(
+                {"originalFilename": upload_file.filename, "error": FILE_TOO_BIG_MESSAGE}
+            )
+            continue
+        try:
+            doc = await _validate_and_store(
+                buffer,
+                upload_file.content_type or "",
+                upload_file.filename or "upload",
+                doc_type,
+                current_user.id,
+            )
+        except HTTPException as exc:
+            results.append({"originalFilename": upload_file.filename, "error": exc.detail})
+            continue
+        created.append(
+            (doc["_id"], buffer, doc["mimeType"], doc["documentType"], doc["processingRunId"])
+        )
+        results.append({"document": _serialize_document(doc)})
+
+    # Strictly sequential - one file's full OCR->AI->save pipeline completes
+    # before the next starts, matching the old app's single-slot queue.
+    # process_document() already catches every Exception internally and
+    # marks the doc "failed" rather than raising - this outer guard is
+    # defense-in-depth so that even a failure INSIDE that safety net (e.g.
+    # the DB write in its own except-block failing) can't abort the rest of
+    # the batch. An unhandled exception here would otherwise stop the loop
+    # at whichever file triggered it, silently leaving every later file in
+    # the batch stuck at "uploaded" forever.
+    async def _run_sequentially() -> None:
+        for doc_id, buffer, mime_type, doc_type, run_id in created:
+            try:
+                await process_document(doc_id, buffer, mime_type, doc_type, run_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    f"Bulk-upload file {doc_id} crashed the pipeline: class={type(exc).__name__}"
+                )
+                db = get_database()
+                try:
+                    await db.documents.update_one(
+                        {"_id": doc_id, "processingRunId": run_id},
+                        {
+                            "$set": {
+                                "uploadStatus": "failed",
+                                "processingError": user_message(PROCESSING_ERROR),
+                                "processingErrorCode": PROCESSING_ERROR,
+                                "updatedAt": datetime.now(UTC),
+                            }
+                        },
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
+    background_tasks.add_task(_run_sequentially)
+    return {"results": results}
+
+
+def _serialize_document(doc: dict) -> dict:
+    # *Confidence keys: legacy rows may still carry the removed AI-confidence fields.
+    out = {k: v for k, v in doc.items() if k != "ocrTextHidden" and not k.endswith("Confidence")}
+    out["_id"] = str(out["_id"])
+    out["userId"] = str(out["userId"])
+    if out.get("gridFsFileId"):
+        out["gridFsFileId"] = str(out["gridFsFileId"])
+    return out
+
+
+UPLOADED_FROM_MIN = datetime(2000, 1, 1, tzinfo=UTC)
+
+
+def _parse_uploaded_from(value: str) -> datetime:
+    """Strict ISO-8601 with an explicit offset (the browser sends ...Z). The client computes
+    "start of today/week/month/year" in ITS timezone; the server only compares instants."""
+    invalid = HTTPException(status_code=400, detail="Invalid date filter.")
+    if len(value) > 40:
+        raise invalid
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        raise invalid from None
+    if parsed.tzinfo is None:
+        raise invalid
+    parsed = parsed.astimezone(UTC)
+    if parsed < UPLOADED_FROM_MIN or parsed > datetime.now(UTC) + timedelta(days=1):
+        raise invalid
+    return parsed
+
+
+def _escape_regex(value: str) -> str:
+    return re.escape(value)
+
+
+_TEXT_COLLATION = Collation(locale="en", strength=2)
+_SORT_HELPER = "_sortKey"
+
+
+def _str_or_empty(field: str) -> dict:
+    return {"$cond": [{"$eq": [{"$type": field}, "string"]}, field, ""]}
+
+
+def _sort_key_expr(sort: str) -> dict | str:
+    """Mongo expression for the sort key (see list_documents for the semantics)."""
+    if sort == "number":
+        a, b = _str_or_empty("$taxInvoiceNo"), _str_or_empty("$referenceNo")
+        tax_number = {
+            "$cond": [
+                {"$and": [{"$ne": [a, ""]}, {"$ne": [b, ""]}]},
+                {"$concat": [a, " / ", b]},
+                {"$concat": [a, b]},
+            ]
+        }
+        return {
+            "$cond": [
+                {"$eq": ["$documentType", "Tax Invoice"]},
+                tax_number,
+                _str_or_empty("$number"),
+            ]
+        }
+    if sort == "date":  # DD/MM/YYYY -> YYYYMMDD, anything else -> ""
+        return {
+            "$cond": [
+                {
+                    "$and": [
+                        {"$eq": [{"$type": "$date"}, "string"]},
+                        {"$regexMatch": {"input": "$date", "regex": r"^\d{2}/\d{2}/\d{4}$"}},
+                    ]
+                },
+                {
+                    "$concat": [
+                        {"$substrCP": ["$date", 6, 4]},
+                        {"$substrCP": ["$date", 3, 2]},
+                        {"$substrCP": ["$date", 0, 2]},
+                    ]
+                },
+                "",
+            ]
+        }
+    if sort == "edited":
+        return {"$eq": ["$edited", True]}
+    if sort in ("documentType", "uploadStatus"):
+        return _str_or_empty(f"${sort}")
+    return "$createdAt"
+
+
+def _sorted_page_pipeline(
+    filter_query: dict, sort: str, direction: int, skip: int, lim: int
+) -> list[dict]:
+    return [
+        {"$match": filter_query},
+        {"$addFields": {_SORT_HELPER: _sort_key_expr(sort)}},
+        {"$sort": {_SORT_HELPER: direction, "_id": direction}},
+        {"$skip": skip},
+        {"$limit": lim},
+        {"$project": {_SORT_HELPER: 0}},
+    ]
+
+
+@router.get("")
+async def list_documents(
+    document_type: str | None = Query(default=None, alias="documentType"),
+    number: str | None = Query(default=None),
+    date: str | None = Query(default=None),
+    range: Literal["today", "week", "month", "year"] | None = Query(default=None),
+    month: str | None = Query(default=None),
+    uploaded_from: str | None = Query(default=None, alias="uploadedFrom"),
+    page: int | None = Query(default=None),
+    limit: int | None = Query(default=None),
+    sort: (
+        Literal["documentType", "number", "date", "uploadStatus", "edited", "createdAt"] | None
+    ) = Query(default=None),
+    order: Literal["asc", "desc"] | None = Query(default=None),
+    current_user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Paginated only when ?page= is passed (every page must use this mode).
+
+    Paged sort: no sort/order = createdAt desc (unchanged). Otherwise sort=<whitelisted key>,
+    order defaults to asc (createdAt-with-order-only sorts createdAt). `_id` is always the final
+    tie-breaker in the SAME direction as the primary key, so walking all pages yields each
+    document exactly once.
+
+    No ?page = legacy FULL-LIST mode: UNBOUNDED, returns every document the user has. Pages must
+    NOT use it (use ?page= and GET /summary); kept only for old callers and tests."""
+    db = get_database()
+    filter_query: dict = {"userId": current_user.id, "isDeleted": {"$ne": True}}
+
+    if document_type in DOCUMENT_TYPES:
+        filter_query["documentType"] = document_type
+    if number and "\x00" in number:
+        raise HTTPException(status_code=400, detail="Invalid search text.")
+    if number and number.strip():
+        regex = {"$regex": _escape_regex(number.strip()), "$options": "i"}
+        filter_query["$or"] = [
+            {"taxInvoiceNo": regex},
+            {"referenceNo": regex},
+            {"number": regex},
+        ]
+    if date and date.strip():
+        filter_query["date"] = date.strip()
+    if month:
+        # By the document's OWN date (DD/MM/YYYY string), not upload time. Combined via $and so
+        # it can never overwrite the number search's $or.
+        if month == "none":
+            date_cond: dict = {"date": {"$not": re.compile(r"^\d{2}/\d{2}/\d{4}$")}}
+        else:
+            m = MONTH_RE.match(month)
+            if not m:
+                raise HTTPException(status_code=400, detail="Invalid month.")
+            date_cond = {"date": re.compile(rf"^\d{{2}}/{m.group(2)}/{m.group(1)}$")}
+        filter_query["$and"] = [date_cond]
+    # Lower bounds on upload time (createdAt). Both filters may be present: the later one wins.
+    lower_bounds: list[datetime] = []
+    if range in RANGE_DAYS:
+        lower_bounds.append(datetime.now(UTC) - timedelta(days=RANGE_DAYS[range]))
+    if uploaded_from and uploaded_from.strip():
+        lower_bounds.append(_parse_uploaded_from(uploaded_from.strip()))
+    if lower_bounds:
+        filter_query["createdAt"] = {"$gte": max(lower_bounds)}
+
+    if page:
+        # Capped: page=10**18 used to overflow Mongo's skip (500) and
+        # limit=10**9 returned everything in one response.
+        lim = min(MAX_PAGE_SIZE, max(1, limit or 30))
+        pg = min(MAX_PAGE_NUMBER, max(1, page))
+        skip = (pg - 1) * lim
+        total_documents = await db.documents.count_documents(filter_query)
+        cursor: Any
+        if sort is None and order is None:
+            cursor = db.documents.find(filter_query).sort("createdAt", -1).skip(skip).limit(lim)
+        else:
+            direction = -1 if order == "desc" else 1
+            cursor = db.documents.aggregate(
+                _sorted_page_pipeline(filter_query, sort or "createdAt", direction, skip, lim),
+                allowDiskUse=True,
+                collation=_TEXT_COLLATION,
+            )
+        documents = [_serialize_document(d) async for d in cursor]
+        return {
+            "documents": documents,
+            "totalDocuments": total_documents,
+            "totalPages": max(1, -(-total_documents // lim)),
+            "currentPage": pg,
+        }
+
+    cursor = db.documents.find(filter_query).sort("createdAt", -1)
+    documents = [_serialize_document(d) async for d in cursor]
+    by_document_type = {"Tax Invoice": 0, "Delivery Challan": 0}
+    for d in documents:
+        if d["documentType"] in by_document_type:
+            by_document_type[d["documentType"]] += 1
+    return {"documents": documents, "byDocumentType": by_document_type}
+
+
+@router.get("/summary")
+async def documents_summary(current_user: CurrentUser = Depends(get_current_user)) -> dict:
+    """Dashboard numbers computed in the database (no full list). processedToday = processed docs
+    whose processedAt (else reprocessedAt, else updatedAt) falls on today's IST calendar day."""
+    start = ist_midnight_utc(now_ist())  # one clock read: both bounds come from the same instant
+    end = start + timedelta(days=1)  # IST has a fixed offset, so +24h is exactly the next midnight
+    stamp = {"$ifNull": ["$processedAt", {"$ifNull": ["$reprocessedAt", "$updatedAt"]}]}
+    processed = {"$eq": ["$uploadStatus", "processed"]}
+    today = {
+        "$and": [
+            processed,
+            {"$eq": [{"$type": stamp}, "date"]},
+            {"$gte": [stamp, start]},
+            {"$lt": [stamp, end]},
+        ]
+    }
+
+    def count(cond: dict) -> list[dict]:
+        return [{"$match": {"$expr": cond}}, {"$count": "n"}]
+
+    pipeline = [
+        {"$match": {"userId": current_user.id, "isDeleted": {"$ne": True}}},
+        {
+            "$facet": {
+                "total": [{"$count": "n"}],
+                "processed": count(processed),
+                "failed": count({"$eq": ["$uploadStatus", "failed"]}),
+                "today": count(today),
+                "todayTaxInvoice": count(
+                    {"$and": [today, {"$eq": ["$documentType", "Tax Invoice"]}]}
+                ),
+                "todayChallan": count(
+                    {"$and": [today, {"$eq": ["$documentType", "Delivery Challan"]}]}
+                ),
+                "taxInvoice": count({"$eq": ["$documentType", "Tax Invoice"]}),
+                "challan": count({"$eq": ["$documentType", "Delivery Challan"]}),
+                "recent": [{"$sort": {"createdAt": -1, "_id": -1}}, {"$limit": 3}],
+            }
+        },
+    ]
+    res = await get_database().documents.aggregate(pipeline).to_list(1)
+    facet = res[0] if res else {}
+
+    def n(key: str) -> int:
+        return facet[key][0]["n"] if facet.get(key) else 0
+
+    return {
+        "total": n("total"),
+        "processed": n("processed"),
+        "failed": n("failed"),
+        "processedToday": n("today"),
+        "processedTodayByType": {
+            "Tax Invoice": n("todayTaxInvoice"),
+            "Delivery Challan": n("todayChallan"),
+        },
+        "byDocumentType": {"Tax Invoice": n("taxInvoice"), "Delivery Challan": n("challan")},
+        "recent": [_serialize_document(d) for d in facet.get("recent", [])],
+    }
+
+
+@router.get("/training-stats")
+async def training_stats(current_user: CurrentUser = Depends(get_current_user)) -> dict:
+    db = get_database()
+    base_filter = {"userId": current_user.id, "isDeleted": {"$ne": True}}
+    trained_count = await db.documents.count_documents({**base_filter, "uploadStatus": "processed"})
+    corrected_count = await db.documents.count_documents({**base_filter, "edited": True})
+    return {"trainedCount": trained_count, "correctedCount": corrected_count}
+
+
+# Action types relevant to a regular user's own "My Activity" timeline -
+# admin-only/system entries (login, signup, password_change, user_updated,
+# admin_nuke_*, orphaned_file_*, purge_*_blocked, ...) are deliberately
+# excluded. Logged for a user's own documents: upload, OCR success, manual
+# correction (field name only, never values), reprocess, delete and file purge.
+MY_ACTIVITY_ACTIONS = [
+    "document_processed",
+    "document_uploaded",
+    "document_corrected",
+    "document_edited",
+    "document_deleted",
+    "document_file_purged",
+    "document_reprocessed",
+]
+
+
+def _serialize_activity(log: dict, doc_lookup: dict) -> dict:
+    context = log.get("context") or {}
+    doc = doc_lookup.get(context.get("documentId"))
+    return {
+        "id": str(log["_id"]),
+        "action": log["action"],
+        "context": context,
+        "createdAt": log.get("createdAt"),
+        "document": (
+            {
+                "id": str(doc["_id"]),
+                "documentType": doc.get("documentType"),
+                "number": doc.get("taxInvoiceNo") or doc.get("number"),
+                "date": doc.get("date"),
+            }
+            if doc
+            else None
+        ),
+    }
+
+
+@router.get("/my-activity")
+async def my_activity(
+    page: int | None = Query(default=None),
+    limit: int | None = Query(default=None),
+    current_user: CurrentUser = Depends(get_current_user),
+) -> dict:
+    """Read-only timeline of the authenticated user's OWN activity, sourced
+    entirely from the existing auditlogs collection - no new logging, no
+    change to what gets logged or when. Always scoped to current_user.id
+    from the JWT (re-verified via get_current_user, same as every other
+    user-scoped route) - there is no id parameter here for a caller to
+    manipulate. Paginated at 40/page, distinct from the 30/page used
+    elsewhere - intentional, not a bug. Registered before GET /{doc_id} so
+    "my-activity" is never matched as a doc_id (same reasoning as the
+    former /purge-* routes)."""
+    db = get_database()
+    lim = min(MAX_PAGE_SIZE, max(1, limit or 40))
+    pg = min(MAX_PAGE_NUMBER, max(1, page or 1))
+    skip = (pg - 1) * lim
+    filt = {"userId": current_user.id, "action": {"$in": MY_ACTIVITY_ACTIONS}}
+
+    total = await db.auditlogs.count_documents(filt)
+    cursor = db.auditlogs.find(filt).sort("createdAt", -1).skip(skip).limit(lim)
+    logs = await cursor.to_list(length=None)
+
+    doc_ids: list[ObjectId] = []
+    for log in logs:
+        doc_id_str = (log.get("context") or {}).get("documentId")
+        if doc_id_str:
+            try:
+                doc_ids.append(ObjectId(doc_id_str))
+            except Exception:  # noqa: BLE001
+                pass
+    doc_lookup: dict[str, dict] = {}
+    if doc_ids:
+        # "Delete" now permanently removes the Document record itself, so
+        # this lookup can legitimately come back empty for a deleted
+        # document's log entries - _serialize_activity() below already
+        # handles that (`document: null`), by design: the audit-log entry
+        # persists independently of whether the document it references
+        # still exists.
+        async for d in db.documents.find(
+            # userId filter: defence in depth - these ids come from the caller's own
+            # audit entries, but a lookup by bare _id must never be able to surface
+            # another user's document fields.
+            {"_id": {"$in": doc_ids}, "userId": current_user.id},
+            {"documentType": 1, "taxInvoiceNo": 1, "number": 1, "date": 1},
+        ):
+            doc_lookup[str(d["_id"])] = d
+
+    return {
+        "activity": [_serialize_activity(log, doc_lookup) for log in logs],
+        "totalActivity": total,
+        "totalPages": max(1, -(-total // lim)),
+        "currentPage": pg,
+    }
+
+
+async def _get_owned_document(doc_id: PyObjectId, user_id: ObjectId) -> dict:
+    db = get_database()
+    doc = await db.documents.find_one(
+        {"_id": doc_id, "userId": user_id, "isDeleted": {"$ne": True}}
+    )
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return doc
+
+
+@router.get("/{doc_id}")
+async def get_document(
+    doc_id: PyObjectId, current_user: CurrentUser = Depends(get_current_user)
+) -> dict:
+    doc = await _get_owned_document(doc_id, current_user.id)
+    return {"document": _serialize_document(doc)}
+
+
+@router.get("/{doc_id}/download")
+async def download_document(
+    doc_id: PyObjectId, current_user: CurrentUser = Depends(get_current_user)
+) -> Response:
+    doc = await _get_owned_document(doc_id, current_user.id)
+    if doc.get("filePurged"):
+        raise HTTPException(
+            status_code=400,
+            detail=("Original file removed to save space - extracted data below remains accurate."),
+        )
+    buffer = await download_buffer(doc["gridFsFileId"])
+    return Response(
+        content=buffer,
+        media_type=doc["mimeType"],
+        headers={"Content-Disposition": _content_disposition(doc["originalFilename"])},
+    )
+
+
+@router.post("/download-all")
+async def download_all_documents(
+    body: DownloadAllRequest, current_user: CurrentUser = Depends(get_current_user)
+) -> StreamingResponse:
+    """ "Download All" for one documents page: bundles every requested
+    document's original file into a single ZIP, same page-scoping contract
+    as bulk-save (excel/router.py::bulk_save_documents_to_excel) - the
+    frontend sends exactly the document ids currently on that page. Any id that
+    doesn't belong to this user, any document with no file (filePurged, or a
+    GridFS fetch that fails for any reason) is silently skipped and counted
+    rather than aborting the whole archive - a manipulated id list can only
+    ever skip an entry, never leak another user's file into the zip.
+
+    Limits: MAX_DOWNLOAD_ALL_IDS ids, MAX_DOWNLOAD_ALL_BYTES of stored originals
+    (checked from metadata before any file is read), one running download per
+    user. The zip is built on disk one file at a time and streamed back."""
+    if len(body.document_ids) > MAX_DOWNLOAD_ALL_IDS:
+        raise HTTPException(status_code=400, detail="Select fewer documents.")
+    user_id = current_user.id
+    # Check-and-add with no await in between: race-free within one event loop.
+    now = time.monotonic()
+    started = _active_downloads.get(user_id)
+    if started is not None and now - started < DOWNLOAD_SLOT_TIMEOUT_SECONDS:
+        raise HTTPException(status_code=429, detail="A download is already running.")
+    _active_downloads[user_id] = now
+    tmp_path: str | None = None
+    released = False
+
+    def cleanup() -> None:
+        # Idempotent: runs from the generator's finally AND a BackgroundTask.
+        nonlocal released
+        if released:
+            return
+        released = True
+        # Only free our own slot - a stale one may already have been taken over by a newer run.
+        if _active_downloads.get(user_id) == now:
+            del _active_downloads[user_id]
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    try:
+        db = get_database()
+        # dict.fromkeys keeps order and drops repeats.
+        ids = list(dict.fromkeys(body.document_ids))
+        docs = {
+            d["_id"]: d
+            async for d in db.documents.find(
+                {"_id": {"$in": ids}, "userId": user_id, "isDeleted": {"$ne": True}}
+            )
+        }
+        usable = [
+            d
+            for d in (docs.get(i) for i in ids)
+            if d and not d.get("filePurged") and d.get("gridFsFileId")
+        ]
+        total_bytes = sum(d.get("size") or MAX_FILE_SIZE for d in usable)
+        if total_bytes > MAX_DOWNLOAD_ALL_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail="Selected files are too large to download together. "
+                "Select fewer documents.",
+            )
+
+        seen_names: dict[str, int] = {}
+        included = 0
+        skipped = len(ids) - len(usable)
+        fd, tmp_path = tempfile.mkstemp(suffix=".zip", prefix="download-all-")
+        os.close(fd)
+        zf = await asyncio.to_thread(zipfile.ZipFile, tmp_path, "w", zipfile.ZIP_DEFLATED)
+        try:
+            for doc in usable:
+                try:
+                    file_buffer = await download_buffer(doc["gridFsFileId"])
+                except Exception:  # noqa: BLE001
+                    skipped += 1
+                    continue
+                await asyncio.to_thread(zf.writestr, _zip_entry_name(doc, seen_names), file_buffer)
+                del file_buffer
+                included += 1
+        finally:
+            await asyncio.to_thread(zf.close)
+        zip_size = os.path.getsize(tmp_path)
+
+        await log_action(
+            user_id,
+            "documents_download_all",
+            {"requested": len(body.document_ids), "included": included, "skipped": skipped},
+        )
+    except BaseException:
+        cleanup()
+        raise
+
+    path = tmp_path
+
+    async def stream() -> AsyncIterator[bytes]:
+        # The finally runs when Starlette cancels/closes the generator on client
+        # disconnect; a BackgroundTask alone would NOT run then. The BackgroundTask
+        # below covers the case where the body is never iterated at all.
+        try:
+            with open(path, "rb") as f:
+                while chunk := await asyncio.to_thread(f.read, 64 * 1024):
+                    yield chunk
+        finally:
+            cleanup()
+
+    return StreamingResponse(
+        stream(),
+        media_type="application/zip",
+        background=BackgroundTask(cleanup),
+        headers={
+            "Content-Disposition": 'attachment; filename="documents.zip"',
+            "Content-Length": str(zip_size),
+            "X-Download-Included": str(included),
+            "X-Download-Skipped": str(skipped),
+            "X-Download-Total": str(len(body.document_ids)),
+        },
+    )
+
+
+@router.post("/{doc_id}/reprocess")
+async def reprocess_document(
+    doc_id: PyObjectId,
+    background_tasks: BackgroundTasks,
+    current_user: CurrentUser = Depends(get_current_user),
+) -> MessageResponse:
+    db = get_database()
+    now = datetime.now(UTC)
+    run_id = uuid4().hex
+    reset = extraction_reset_ops()
+    # ONE atomic claim: the check ("not already being processed") and the reset are the same
+    # update, so two quick clicks can never both win. The guard is exactly: the user's own,
+    # not deleted, original file still there, and NOT (status 'uploaded' and touched less than
+    # REPROCESS_STUCK_AFTER ago) - a document stuck longer (crash) can still be reprocessed.
+    # The new processingRunId makes any older job for this document stale (it writes nothing).
+    # Wipe EVERYTHING the previous read left behind in the same update (issue 8).
+    doc = await db.documents.find_one_and_update(
+        {
+            "_id": doc_id,
+            "userId": current_user.id,
+            "isDeleted": {"$ne": True},
+            "filePurged": {"$ne": True},
+            "$or": [
+                {"uploadStatus": {"$ne": "uploaded"}},
+                {"updatedAt": {"$lte": now - REPROCESS_STUCK_AFTER}},
+                {"updatedAt": None},
+            ],
+        },
+        {
+            "$set": {
+                **reset["$set"],
+                "uploadStatus": "uploaded",
+                "processingError": None,
+                "processingErrorCode": None,
+                "recoveryAttempts": 0,
+                "edited": False,
+                "exported": False,
+                "processingRunId": run_id,
+                "updatedAt": now,
+            },
+            "$unset": reset["$unset"],
+        },
+        # BEFORE: if the original file cannot be read afterwards, the document goes back exactly
+        # as it was (its values, flags and manual corrections must never be lost to a failed read).
+        return_document=ReturnDocument.BEFORE,
+    )
+    if doc is None:
+        existing = await _get_owned_document(doc_id, current_user.id)  # 404: missing/other user
+        if existing.get("filePurged"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "The original file was removed to save space, so this document "
+                    "can no longer be reprocessed."
+                ),
+            )
+        raise HTTPException(
+            status_code=409, detail="This document is already being processed. Please wait."
+        )
+    try:
+        buffer = await download_buffer(doc["gridFsFileId"])
+    except Exception as exc:  # noqa: BLE001
+        # The claim already moved the document to 'uploaded' and wiped its values: put it back
+        # EXACTLY as it was before (never stuck in 'uploaded', nothing lost), conditional on our run
+        # id so a newer run is left alone.
+        logger.error(f"Reprocess could not read the original file: class={type(exc).__name__}")
+        touched = [
+            *reset["$set"],
+            *reset["$unset"],
+            "uploadStatus",
+            "processingError",
+            "processingErrorCode",
+            "recoveryAttempts",
+            "edited",
+            "exported",
+            "processingRunId",
+            "updatedAt",
+        ]
+        restore: dict = {}
+        if to_set := {k: doc[k] for k in touched if k in doc}:
+            restore["$set"] = to_set
+        if to_unset := {k: "" for k in touched if k not in doc}:
+            restore["$unset"] = to_unset
+        await db.documents.update_one({"_id": doc["_id"], "processingRunId": run_id}, restore)
+        raise HTTPException(
+            status_code=500, detail="Could not read the original file. Please try again."
+        ) from None
+
+    async def _reprocess_then_stamp() -> None:
+        await process_document(doc["_id"], buffer, doc["mimeType"], doc["documentType"], run_id)
+        await db.documents.update_one(
+            {"_id": doc["_id"], "processingRunId": run_id},
+            {"$set": {"reprocessedAt": datetime.now(UTC)}},
+        )
+
+    await safe_log_action(
+        current_user.id,
+        "document_reprocessed",
+        {
+            "documentId": str(doc["_id"]),
+            "filename": doc.get("originalFilename"),
+            "documentType": doc.get("documentType"),
+        },
+    )
+    background_tasks.add_task(_reprocess_then_stamp)
+    return MessageResponse(message="Reprocessing started. Check document status shortly.")
+
+
+@router.delete("/{doc_id}")
+async def delete_document(
+    doc_id: PyObjectId, current_user: CurrentUser = Depends(get_current_user)
+) -> DeleteResponse:
+    """Full, permanent delete: removes both the GridFS file and the Document
+    record itself - there is no soft-delete/hidden state anymore (previously
+    this only set isDeleted/deletedAt and hid the row from every list/detail
+    query). ExportedRow/export-history entries for this document are
+    deliberately left untouched - already-exported data stays independent of
+    the source document's lifecycle. A GridFS failure does NOT block the
+    delete (mirrors purge-file's cleanup_failed contract below) - the record
+    is removed regardless and the failure is tracked in orphanedfiles."""
+    doc = await _get_owned_document(doc_id, current_user.id)
+    cleanup_failed = False
+    if doc.get("gridFsFileId"):
+        try:
+            await delete_file(doc["gridFsFileId"])
+        except Exception as exc:  # noqa: BLE001
+            await record_orphaned_file(
+                doc["gridFsFileId"], doc["_id"], current_user.id, "document_deleted", exc
+            )
+            cleanup_failed = True
+
+    db = get_database()
+    await db.documents.delete_one({"_id": doc["_id"]})
+    await db.corrections.delete_many({"documentId": doc["_id"]})
+    await log_action(
+        current_user.id,
+        "document_deleted",
+        {"documentId": str(doc["_id"]), "filename": doc.get("originalFilename")},
+    )
+    message = (
+        "Document permanently deleted."
+        if not cleanup_failed
+        else (
+            "Document permanently deleted, but we couldn't fully clean up the original file "
+            "due to a system issue. This has been flagged for admin review - no action needed "
+            "from you."
+        )
+    )
+    return DeleteResponse(message=message, grid_fs_cleanup_failed=cleanup_failed)
+
+
+@router.post("/{doc_id}/purge-file")
+async def purge_document_file(
+    doc_id: PyObjectId, current_user: CurrentUser = Depends(get_current_user)
+) -> PurgeFileResponse:
+    """ "File Delete" in the UI - space-saving, irreversible action: permanently
+    removes the stored original file from GridFS while leaving the Document
+    record's extracted metadata (number, date, type, status,
+    timestamps) untouched. Distinct from DELETE /{doc_id} ("Delete" in the
+    UI - a full permanent delete of the whole record) - this only purges the
+    heavy file data. A GridFS failure here does NOT block
+    the user's action (filePurged is still set) - it's tracked in
+    orphanedfiles and surfaced via gridFsCleanupFailed so the frontend can
+    show a softer "flagged for admin review" message instead of a plain
+    success toast."""
+    doc = await _get_owned_document(doc_id, current_user.id)
+    if doc.get("filePurged"):
+        raise HTTPException(
+            status_code=400, detail="This document's original file has already been removed."
+        )
+    if not doc.get("gridFsFileId"):
+        raise HTTPException(status_code=400, detail="No original file is stored for this document.")
+
+    cleanup_failed = False
+    try:
+        await delete_file(doc["gridFsFileId"])
+    except Exception as exc:  # noqa: BLE001
+        await record_orphaned_file(
+            doc["gridFsFileId"], doc["_id"], current_user.id, "purge_file", exc
+        )
+        cleanup_failed = True
+
+    db = get_database()
+    now = datetime.now(UTC)
+    await db.documents.update_one(
+        {"_id": doc["_id"]},
+        {
+            "$set": {
+                "filePurged": True,
+                "filePurgedAt": now,
+                # Clear the now-dangling reference - otherwise a later full
+                # DELETE /{doc_id} still sees a truthy gridFsFileId, retries
+                # deleting a file that's already gone, gets a NoFile error,
+                # and wrongly logs a false-positive orphaned-file record for
+                # a file that was actually cleaned up correctly right here.
+                "gridFsFileId": None,
+                "updatedAt": now,
+            }
+        },
+    )
+    await log_action(
+        current_user.id,
+        "document_file_purged",
+        {"documentId": str(doc["_id"]), "filename": doc.get("originalFilename")},
+    )
+    message = (
+        "Original file permanently removed. Extracted data remains fully accessible."
+        if not cleanup_failed
+        else (
+            "Your document's data was removed, but we couldn't fully clean up the original "
+            "file due to a system issue. This has been flagged for admin review - no action "
+            "needed from you."
+        )
+    )
+    return PurgeFileResponse(message=message, grid_fs_cleanup_failed=cleanup_failed)
+
+
+@router.patch("/{doc_id}/correct")
+async def correct_document(
+    doc_id: PyObjectId, body: CorrectRequest, current_user: CurrentUser = Depends(get_current_user)
+) -> dict:
+    check_request(body.field, body.value)
+    doc = await _get_owned_document(doc_id, current_user.id)
+    value = validate_correction(doc, body.field, body.value)
+
+    db = get_database()
+    if not await apply_correction(db, doc, body.field, value):
+        raise HTTPException(status_code=409, detail=CHANGED_MSG)
+
+    await safe_log_action(
+        current_user.id,
+        "document_corrected",
+        {
+            "documentId": str(doc["_id"]),
+            "field": body.field,
+            "filename": doc.get("originalFilename"),
+            "documentType": doc.get("documentType"),
+        },
+    )
+    updated = await db.documents.find_one({"_id": doc["_id"]})
+    assert updated is not None
+    return {"message": "Field corrected successfully.", "document": _serialize_document(updated)}
+
+
+MAX_RECOVERY_ATTEMPTS = 2
+RECOVERY_GAVE_UP_MESSAGE = (
+    "Processing was interrupted several times and was stopped. Please reprocess this document."
+)
+
+
+async def _claim_for_recovery(doc: dict) -> dict | None:
+    """Atomically bumps recoveryAttempts and returns the document AFTER the bump, or None
+    if another run already claimed it (the filter pins the counter value we read, so two
+    concurrent runs cannot both win). Saved BEFORE processing starts, so a process killed
+    mid-OCR (e.g. out of memory) has already counted this attempt."""
+    seen = doc.get("recoveryAttempts") or 0
+    return await get_database().documents.find_one_and_update(
+        {
+            "_id": doc["_id"],
+            "uploadStatus": "uploaded",
+            "recoveryAttempts": {"$in": [None, 0]} if seen == 0 else seen,
+        },
+        # a fresh run id: any older job for this document is stale from now on
+        {"$inc": {"recoveryAttempts": 1}, "$set": {"processingRunId": uuid4().hex}},
+        return_document=ReturnDocument.AFTER,
+    )
+
+
+async def recover_interrupted_uploads() -> int:
+    """Requeues anything stuck in 'uploaded' status after a server restart -
+    ported from the old app's recoverInterruptedUploads(), called once at
+    startup from main.py's lifespan. A document that keeps killing the server is
+    given up on after MAX_RECOVERY_ATTEMPTS."""
+    db = get_database()
+    cursor = db.documents.find({"uploadStatus": "uploaded", "isDeleted": {"$ne": True}})
+    docs = await cursor.to_list(length=None)
+    for doc in docs:
+        claimed = await _claim_for_recovery(doc)
+        if claimed is None:
+            continue
+        if claimed["recoveryAttempts"] > MAX_RECOVERY_ATTEMPTS:
+            await db.documents.update_one(
+                {"_id": doc["_id"], "processingRunId": claimed["processingRunId"]},
+                {
+                    "$set": {
+                        "uploadStatus": "failed",
+                        "processingError": RECOVERY_GAVE_UP_MESSAGE,
+                        "updatedAt": datetime.now(UTC),
+                    }
+                },
+            )
+            continue
+        try:
+            buffer = await download_buffer(doc["gridFsFileId"])
+            await process_document(
+                doc["_id"],
+                buffer,
+                doc["mimeType"],
+                doc["documentType"],
+                claimed["processingRunId"],
+            )
+        except Exception:  # noqa: BLE001
+            await db.documents.update_one(
+                {"_id": doc["_id"], "processingRunId": claimed["processingRunId"]},
+                {
+                    "$set": {
+                        "uploadStatus": "failed",
+                        "processingError": (
+                            "Processing was interrupted and could not be recovered. "
+                            "Please reprocess this document."
+                        ),
+                        "updatedAt": datetime.now(UTC),
+                    }
+                },
+            )
+    return len(docs)

@@ -1,0 +1,1614 @@
+import asyncio
+import re
+import time
+from datetime import UTC, datetime, timedelta
+from typing import Any, Literal
+
+from bson import ObjectId
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse
+from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.errors import DuplicateKeyError
+
+from app.core.audit_log import log_action, log_admin_access
+from app.core.database import get_database
+from app.core.object_id import PyObjectId
+from app.core.orphaned_files import record_orphaned_file
+from app.core.rate_limit import limiter, user_or_ip_key
+from app.core.security import hash_password
+from app.core.timezones import IST_OFFSET_STRING, ist_midnight_utc, now_ist
+from app.core.validators import (
+    normalize_email,
+    normalize_username,
+    validate_email,
+    validate_password,
+    validate_username,
+)
+from app.features.admin import purge_service
+from app.features.admin.schemas import (
+    AdminAgeRangeRequest,
+    AdminChangeEmailRequest,
+    AdminMonthsRequest,
+    AdminUpdateUserRequest,
+    RejectRequest,
+)
+from app.features.auth.dependencies import CurrentUser, require_admin
+from app.features.auth.schemas import TempPasswordRequest
+from app.features.chat.files import delete_attachments as chat_delete_attachments
+from app.features.documents.correction_rules import (
+    CHANGED_MSG,
+    apply_correction,
+    check_request,
+    validate_correction,
+)
+from app.features.documents.gridfs_service import delete_file
+from app.features.documents.schemas import CorrectRequest
+from app.features.excel import service as excel_service
+from app.features.ocr.pipeline import ocr_engine_status, ocr_lock_status
+
+router = APIRouter()
+
+# Every nuke-delete variant (per-user age-based, global age-based, global
+# year+month) shares ONE 5-attempts/24h budget per admin account, not 5
+# separate budgets per mode - slowapi's plain @limiter.limit gives each
+# decorated endpoint its own independent bucket even with an identical limit
+# string, so this requires shared_limit() with an explicit shared `scope`
+# (see slowapi/extension.py - the storage key is (key_func result, scope),
+# and scope defaults to the endpoint's own function name unless given).
+NUKE_RATE_LIMIT = "5/24hour"
+NUKE_RATE_SCOPE = "admin_nuke"
+
+ADMIN_ONLY_SELF_MSG = "Admin accounts can only be changed by that admin."
+
+EDITABLE_FIELDS = {"taxInvoiceNo", "referenceNo", "number", "date"}
+FIELDS_BY_DOCUMENT_TYPE = {
+    "Tax Invoice": {"taxInvoiceNo", "referenceNo", "date"},
+    "Delivery Challan": {"number", "date"},
+}
+
+
+def _physical_workbook_filename(user_id: ObjectId, filename: str) -> str:
+    return excel_service.physical_workbook_filename(user_id, filename)
+
+
+def _pagination(
+    page: int | None, limit: int | None, default_limit: int = 30
+) -> tuple[int, int, int]:
+    limit = max(1, limit or default_limit)
+    page = max(1, page or 1)
+    return limit, page, (page - 1) * limit
+
+
+def _serialize_user(user: dict) -> dict:
+    return {
+        "id": str(user["_id"]),
+        "username": user["username"],
+        "email": user["email"],
+        "role": user["role"],
+        "status": user.get("status", "approved"),
+        "tokenVersion": user["tokenVersion"],
+        "authProvider": user.get("authProvider", "local"),
+        "createdAt": user.get("createdAt"),
+        "updatedAt": user.get("updatedAt"),
+        # Approval decision details - this serializer is admin-only (never used for /me or login).
+        "decision": user.get("decision"),
+        "decidedAt": user.get("decidedAt"),
+        "decisionReason": user.get("decisionReason"),
+    }
+
+
+def _serialize_document(doc: dict, owner: dict | None = None) -> dict:
+    out = {k: v for k, v in doc.items() if k != "ocrTextHidden" and not k.endswith("Confidence")}
+    out["_id"] = str(out["_id"])
+    out["userId"] = str(out["userId"])
+    if out.get("gridFsFileId"):
+        out["gridFsFileId"] = str(out["gridFsFileId"])
+    if owner:
+        out["owner"] = {
+            "id": str(owner["_id"]),
+            "username": owner["username"],
+            "email": owner["email"],
+        }
+    return out
+
+
+@router.get("/ping")
+async def ping(current_user: CurrentUser = Depends(require_admin)) -> dict:
+    return {"ok": True, "admin": True}
+
+
+# ---------------------------------------------------------------------------
+# Users
+# ---------------------------------------------------------------------------
+
+
+async def _document_counts(db: AsyncIOMotorDatabase, user_ids: list[ObjectId]) -> dict:
+    """Non-deleted documents per owner, for a whole page of users in ONE aggregation."""
+    rows = db.documents.aggregate(
+        [
+            {"$match": {"userId": {"$in": user_ids}, "isDeleted": {"$ne": True}}},
+            {"$group": {"_id": "$userId", "n": {"$sum": 1}}},
+        ]
+    )
+    return {r["_id"]: r["n"] async for r in rows}
+
+
+@router.get("/users")
+async def list_users(
+    page: int | None = Query(default=None),
+    limit: int | None = Query(default=None),
+    status: Literal["pending", "approved", "rejected"] | None = Query(default=None),
+    q: str | None = Query(default=None, max_length=100),
+    role: Literal["user", "admin"] | None = Query(default=None),
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    db = get_database()
+    lim, pg, skip = _pagination(page, limit)
+    clauses: list[dict] = []
+    if status:
+        clauses.append(_status_query(status))
+    if role:
+        clauses.append({"role": role})
+    if q:
+        rx = {"$regex": re.escape(q), "$options": "i"}
+        clauses.append({"$or": [{"username": rx}, {"email": rx}]})
+    query = {"$and": clauses} if clauses else {}
+    cursor = db.users.find(query, {"passwordHash": 0}).sort("createdAt", -1).skip(skip).limit(lim)
+    raw, total_users, all_users, approved, pending, rejected = await asyncio.gather(
+        cursor.to_list(length=None),
+        db.users.count_documents(query),
+        db.users.count_documents({}),
+        db.users.count_documents(_status_query("approved")),
+        db.users.count_documents(_status_query("pending")),
+        db.users.count_documents(_status_query("rejected")),
+    )
+    counts = await _document_counts(db, [u["_id"] for u in raw])
+    password_request_count = await db.passwordresetrequests.count_documents({"status": "open"})
+    users = [{**_serialize_user(u), "documentCount": counts.get(u["_id"], 0)} for u in raw]
+    return {
+        "users": users,
+        "totalUsers": total_users,
+        "totalPages": max(1, -(-total_users // lim)),
+        "currentPage": pg,
+        # Drives the badge on the admin panel's Pending tab.
+        "pendingCount": pending,
+        # Open password-reset requests (badge on the Password requests tab).
+        "passwordRequestCount": password_request_count,
+        # Whole-collection tallies, unaffected by q/role/status.
+        "statusCounts": {
+            "total": all_users,
+            "approved": approved,
+            "pending": pending,
+            "rejected": rejected,
+        },
+    }
+
+
+def _status_query(status: str) -> dict:
+    # A user document with no status field is a pre-approval-era account and
+    # counts as approved everywhere.
+    if status == "approved":
+        return {"$or": [{"status": "approved"}, {"status": {"$exists": False}}]}
+    return {"status": status}
+
+
+def _guard_other_admin(user: dict, current_user: CurrentUser) -> None:
+    """One admin may never change (edit, demote, reject, delete, purge) ANOTHER admin - only that
+    admin can touch their own account. Call right after loading the target and BEFORE any write
+    or file deletion; every endpoint that acts on a user by id goes through here."""
+    if user.get("role") == "admin" and user["_id"] != current_user.id:
+        raise HTTPException(status_code=403, detail=ADMIN_ONLY_SELF_MSG)
+
+
+async def _set_user_status(
+    user_id: ObjectId, new_status: str, admin: CurrentUser, reason: str | None = None
+) -> dict:
+    db = get_database()
+    user = await db.users.find_one({"_id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    _guard_other_admin(user, admin)
+
+    now = datetime.now(UTC)
+    previous = user.get("status", "approved")
+    update: dict = {"$set": {"status": new_status, "updatedAt": now}}
+    decision = "approved"
+    if new_status == "approved":
+        # One-time "you're approved" notice for the user's next login - but only when this
+        # really is a change to approved (pending/rejected -> approved). Re-approving someone
+        # who is already approved, or a legacy account with no status (= approved), sets nothing.
+        if previous != "approved":
+            update["$set"]["approvalNoticePending"] = True
+        update["$set"].update({"decision": "approved", "decidedAt": now, "decisionReason": None})
+    if new_status == "rejected":
+        update["$set"]["approvalNoticePending"] = False
+        # Admins (including yourself) can never be locked out this way.
+        if user.get("role") == "admin":
+            raise HTTPException(status_code=400, detail="Admin accounts cannot be rejected.")
+        if user_id == admin.id:
+            raise HTTPException(status_code=400, detail="You cannot reject your own account.")
+        # Bumping tokenVersion kills every token already issued to this user.
+        update["$inc"] = {"tokenVersion": 1}
+        # Rejecting someone who was already approved is a revoke; repeating a reject keeps
+        # whatever the first one was.
+        decision = (
+            "revoked"
+            if previous == "approved"
+            or (previous == "rejected" and user.get("decision") == "revoked")
+            else "rejected"
+        )
+        update["$set"].update({"decision": decision, "decidedAt": now, "decisionReason": reason})
+    await db.users.update_one({"_id": user_id}, update)
+    await log_action(
+        admin.id,
+        "user_approved" if new_status == "approved" else "user_rejected",
+        {
+            "targetUserId": str(user_id),
+            "targetEmail": user["email"],
+            "previous": previous,
+            **({"decision": decision, "reason": reason} if new_status == "rejected" else {}),
+        },
+    )
+    refreshed = await db.users.find_one({"_id": user_id}, {"passwordHash": 0})
+    assert refreshed is not None
+    return {"user": _serialize_user(refreshed)}
+
+
+@router.post("/users/{user_id}/approve")
+async def approve_user(
+    user_id: PyObjectId, current_user: CurrentUser = Depends(require_admin)
+) -> dict:
+    return await _set_user_status(user_id, "approved", current_user)
+
+
+@router.post("/users/{user_id}/reject")
+async def reject_user(
+    user_id: PyObjectId,
+    body: RejectRequest | None = Body(default=None),
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    """Reject a pending request OR revoke an approved user - same action, the
+    account is locked out and every issued token dies (tokenVersion bump). The optional
+    reason is shown to the user on their next login attempt."""
+    return await _set_user_status(
+        user_id, "rejected", current_user, body.reason if body is not None else None
+    )
+
+
+@router.get("/users/{user_id}")
+async def get_user(user_id: PyObjectId, current_user: CurrentUser = Depends(require_admin)) -> dict:
+    db = get_database()
+    user = await db.users.find_one({"_id": user_id}, {"passwordHash": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    last_event = await db.auditlogs.find_one(
+        {"userId": user_id}, {"createdAt": 1}, sort=[("createdAt", -1)]
+    )
+    return {
+        "user": {
+            **_serialize_user(user),
+            "documentCount": (await _document_counts(db, [user_id])).get(user_id, 0),
+            "lastActiveAt": last_event.get("createdAt") if last_event else None,
+        }
+    }
+
+
+async def _validated_new_email(db: AsyncIOMotorDatabase, user: dict, raw: str) -> str | None:
+    """Normalizes + validates a new email for `user`. Returns None when it equals
+    the current one (nothing to change); raises 400 when invalid or taken."""
+    email = normalize_email(raw)
+    if err := validate_email(email):
+        raise HTTPException(status_code=400, detail=err)
+    if email == user["email"]:
+        return None
+    # Google sign-in finds the account by email, so changing it would orphan the account and the
+    # user's next Google sign-in would create a NEW pending one.
+    if "google" in user.get("authProvider", "local"):
+        raise HTTPException(
+            status_code=400,
+            detail="This user signs in with Google, so the email cannot be changed.",
+        )
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=400, detail="That email is already in use.")
+    return email
+
+
+@router.put("/users/{user_id}/email")
+async def change_user_email(
+    user_id: PyObjectId,
+    body: AdminChangeEmailRequest,
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    """The only way an email changes (users cannot do it themselves). Bumps
+    tokenVersion so the user's existing sessions end, and is audit-logged."""
+    db = get_database()
+    user = await db.users.find_one({"_id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    _guard_other_admin(user, current_user)
+    email = await _validated_new_email(db, user, body.email)
+    if email is not None:
+        try:
+            await db.users.update_one(
+                {"_id": user_id},
+                {
+                    "$set": {"email": email, "updatedAt": datetime.now(UTC)},
+                    "$inc": {"tokenVersion": 1},
+                },
+            )
+        except Exception as exc:  # unique index race
+            if "E11000" in str(exc):
+                raise HTTPException(
+                    status_code=400, detail="That email is already in use."
+                ) from exc
+            raise
+        await log_action(
+            current_user.id,
+            "user_email_changed",
+            {"targetUserId": str(user_id), "oldEmail": user["email"], "newEmail": email},
+        )
+    refreshed = await db.users.find_one({"_id": user_id}, {"passwordHash": 0})
+    assert refreshed is not None
+    return {"user": _serialize_user(refreshed)}
+
+
+@router.patch("/users/{user_id}")
+async def update_user(
+    user_id: PyObjectId,
+    body: AdminUpdateUserRequest,
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    db = get_database()
+    user = await db.users.find_one({"_id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    _guard_other_admin(user, current_user)
+
+    updates: dict = {}
+    if body.username is not None:
+        username = normalize_username(body.username)
+        if err := validate_username(username):
+            raise HTTPException(status_code=400, detail=err)
+        updates["username"] = username
+
+    email_changed = False
+    if body.email is not None:
+        email = await _validated_new_email(db, user, body.email)
+        if email is not None:
+            updates["email"] = email
+            updates["tokenVersion"] = user["tokenVersion"] + 1
+            email_changed = True
+
+    if body.role is not None:
+        if body.role != "admin" and user.get("role") == "admin":
+            # Demoting an admin: never yourself, and never the last admin -
+            # otherwise the system can end up with nobody able to administer.
+            if user_id == current_user.id:
+                raise HTTPException(status_code=400, detail="You cannot demote your own account.")
+            if await db.users.count_documents({"role": "admin"}) <= 1:
+                raise HTTPException(status_code=400, detail="You cannot demote the last admin.")
+        updates["role"] = body.role
+
+    if updates:
+        updates["updatedAt"] = datetime.now(UTC)
+        await db.users.update_one({"_id": user_id}, {"$set": updates})
+        await log_action(
+            current_user.id,
+            "user_updated",
+            {"targetUserId": str(user_id), "fields": list(updates.keys())},
+        )
+        if email_changed:
+            await log_action(
+                current_user.id,
+                "user_email_changed",
+                {
+                    "targetUserId": str(user_id),
+                    "oldEmail": user["email"],
+                    "newEmail": updates["email"],
+                },
+            )
+        refreshed = await db.users.find_one({"_id": user_id})
+        assert refreshed is not None
+        user = refreshed
+
+    return {"user": _serialize_user(user)}
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: PyObjectId, current_user: CurrentUser = Depends(require_admin)
+) -> dict:
+    """Cascade delete: every document (+ its GridFS file, corrections), every
+    workbook (+ its .xlsx file on disk), every exported-row record, and the
+    excel-state settings row - a clean removal rather than an orphaned trail,
+    ported 1:1 from the old admin.js DELETE /users/:id."""
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account.")
+
+    db = get_database()
+    user = await db.users.find_one({"_id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    _guard_other_admin(user, current_user)
+    if user.get("role") == "admin" and await db.users.count_documents({"role": "admin"}) <= 1:
+        raise HTTPException(status_code=400, detail="You cannot delete the last admin.")
+
+    docs_cursor = db.documents.find({"userId": user_id}, {"_id": 1, "gridFsFileId": 1})
+    docs = await docs_cursor.to_list(length=None)
+    doc_ids = [d["_id"] for d in docs]
+
+    for doc in docs:
+        if doc.get("gridFsFileId"):
+            try:
+                await delete_file(doc["gridFsFileId"])
+            except Exception as exc:  # noqa: BLE001
+                await record_orphaned_file(
+                    doc["gridFsFileId"], doc["_id"], user_id, "admin_cascade_delete", exc
+                )
+
+    await db.corrections.delete_many({"documentId": {"$in": doc_ids}})
+    await db.documents.delete_many({"userId": user_id})
+    await db.exportedrows.delete_many({"userId": user_id})
+
+    workbooks_cursor = db.workbooks.find({"userId": user_id}, {"_id": 1, "filename": 1})
+    workbooks = await workbooks_cursor.to_list(length=None)
+    for wb in workbooks:
+        target = excel_service.file_path(_physical_workbook_filename(user_id, wb["filename"]))
+        if target.exists():
+            try:
+                target.unlink()
+            except OSError:
+                pass
+    await db.workbooks.delete_many({"userId": user_id})
+    await db.settings.delete_many({"userId": user_id})
+    await db.passwordresetrequests.delete_many({"userId": user_id})
+    chat_files = await chat_delete_attachments(db, {"threadUserId": user_id})
+    await db.chatmessages.delete_many({"threadUserId": user_id})  # only this user's thread
+
+    deleted_email = user["email"]
+    await db.users.delete_one({"_id": user_id})
+    await db.passwordresetrequests.delete_many({"userId": user_id})  # one that raced the delete
+    await db.chatmessages.delete_many({"threadUserId": user_id})  # a message sent during the delete
+    late = await chat_delete_attachments(db, {"threadUserId": user_id})
+    chat_files = {k: chat_files[k] + late[k] for k in chat_files}
+
+    await log_action(
+        current_user.id,
+        "user_deleted",
+        {
+            "targetUserId": str(user_id),
+            "targetEmail": deleted_email,
+            "documentsDeleted": len(doc_ids),
+            "workbooksDeleted": len(workbooks),
+            "chatFilesDeleted": chat_files["files"],
+            "chatBytesFreed": chat_files["bytes"],
+        },
+    )
+    return {"message": "User and all associated data deleted successfully."}
+
+
+# ---------------------------------------------------------------------------
+# Password-reset requests (admin-handled; admins themselves use reset_admin_password.py)
+# ---------------------------------------------------------------------------
+
+
+def _serialize_password_request(r: dict) -> dict:
+    return {
+        "id": str(r["_id"]),
+        "userId": str(r["userId"]),
+        "username": r.get("username"),
+        "email": r.get("email"),
+        "note": r.get("note") or "",
+        "status": r["status"],
+        "createdAt": r.get("createdAt"),
+        "updatedAt": r.get("updatedAt"),
+        "resolvedAt": r.get("resolvedAt"),
+        "resolution": r.get("resolution"),
+    }
+
+
+@router.get("/password-requests")
+async def list_password_requests(
+    status: Literal["open", "all"] = Query(default="open"),
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    db = get_database()
+    query = {"status": "open"} if status == "open" else {}
+    rows = await db.passwordresetrequests.find(query).sort("createdAt", -1).limit(500).to_list(500)
+    rows.sort(key=lambda r: r["status"] != "open")  # stable: open first, newest first inside
+    open_count = await db.passwordresetrequests.count_documents({"status": "open"})
+    return {"requests": [_serialize_password_request(r) for r in rows], "openCount": open_count}
+
+
+async def _open_request_or_error(db: AsyncIOMotorDatabase, request_id: ObjectId) -> dict:
+    req = await db.passwordresetrequests.find_one({"_id": request_id})
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found.")
+    if req["status"] != "open":
+        raise HTTPException(status_code=409, detail="This request has already been handled.")
+    return req
+
+
+@router.post("/password-requests/{request_id}/temp-password")
+async def set_temp_password(
+    request_id: PyObjectId,
+    body: TempPasswordRequest,
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    db = get_database()
+    req = await _open_request_or_error(db, request_id)
+    user = await db.users.find_one({"_id": req["userId"]})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    _guard_other_admin(user, current_user)
+    if user.get("role") == "admin" or user.get("status", "approved") != "approved":
+        raise HTTPException(
+            status_code=403, detail="A temporary password can only be set for an approved user."
+        )
+    if err := validate_password(body.password, user.get("username"), user.get("email")):
+        raise HTTPException(status_code=422, detail=err)
+
+    new_hash = hash_password(body.password)  # slow: before claiming anything
+    now = datetime.now(UTC)
+    # 1) claim the request atomically (a second admin loses with 409)
+    claimed = await db.passwordresetrequests.find_one_and_update(
+        {"_id": request_id, "status": "open"},
+        {
+            "$set": {
+                "status": "done",
+                "resolution": "temp_password",
+                "resolvedAt": now,
+                "resolvedBy": current_user.id,
+                "updatedAt": now,
+            }
+        },
+    )
+    if claimed is None:
+        raise HTTPException(status_code=409, detail="This request has already been handled.")
+
+    async def roll_back() -> None:
+        try:
+            await db.passwordresetrequests.update_one(
+                {"_id": request_id, "status": "done", "resolvedAt": now},
+                {
+                    "$set": {
+                        "status": "open",
+                        "resolution": None,
+                        "resolvedAt": None,
+                        "resolvedBy": None,
+                    }
+                },
+            )
+        except DuplicateKeyError:
+            pass  # user filed a fresh open request meanwhile; that one is the live request
+
+    # 2) update the user, only if still an approved non-admin
+    try:
+        result = await db.users.update_one(
+            {"_id": req["userId"], "role": {"$ne": "admin"}, **_status_query("approved")},
+            {
+                "$set": {"passwordHash": new_hash, "mustChangePassword": True, "updatedAt": now},
+                "$inc": {"tokenVersion": 1},
+            },
+        )
+    except Exception:
+        await roll_back()
+        raise
+    # 3) nothing matched: undo the claim
+    if result.matched_count == 0:
+        await roll_back()
+        raise HTTPException(
+            status_code=403, detail="A temporary password can only be set for an approved user."
+        )
+    # 4) audit (ids only, never the password)
+    await log_action(
+        current_user.id,
+        "PASSWORD_RESET_TEMP_SET",
+        {"targetUserId": str(req["userId"]), "requestId": str(request_id)},
+    )
+    return {"ok": True}
+
+
+@router.post("/password-requests/{request_id}/dismiss")
+async def dismiss_password_request(
+    request_id: PyObjectId, current_user: CurrentUser = Depends(require_admin)
+) -> dict:
+    db = get_database()
+    req = await _open_request_or_error(db, request_id)
+    now = datetime.now(UTC)
+    result = await db.passwordresetrequests.update_one(
+        {"_id": request_id, "status": "open"},
+        {
+            "$set": {
+                "status": "dismissed",
+                "resolution": "dismissed",
+                "resolvedAt": now,
+                "resolvedBy": current_user.id,
+                "updatedAt": now,
+            }
+        },
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=409, detail="This request has already been handled.")
+    await log_action(
+        current_user.id,
+        "PASSWORD_RESET_DISMISSED",
+        {"targetUserId": str(req["userId"]), "requestId": str(request_id)},
+    )
+    return {"ok": True}
+
+
+async def _execute_purge(filter_query: dict) -> tuple[int, int, list[str]]:
+    """Shared execution tail for every nuke variant below, once the filter is
+    built and the confirmation gate has passed: delete each matched
+    document's GridFS file, surgically remove its exported Excel rows (or
+    the whole workbook if that empties it), then hard-delete the document
+    and exportedrows records themselves. Returns
+    (documentsDeleted, rowsRemoved, workbooksFullyDeleted)."""
+    db = get_database()
+    docs = await db.documents.find(filter_query).to_list(None)
+    doc_ids = [d["_id"] for d in docs]
+
+    for doc in docs:
+        if doc.get("gridFsFileId"):
+            try:
+                await delete_file(doc["gridFsFileId"])
+            except Exception as exc:  # noqa: BLE001
+                await record_orphaned_file(
+                    doc["gridFsFileId"], doc["_id"], doc.get("userId"), "admin_nuke_purge", exc
+                )
+
+    rows_removed = 0
+    workbooks_fully_deleted: list[str] = []
+    if doc_ids:
+        exported_rows = await db.exportedrows.find({"documentId": {"$in": doc_ids}}).to_list(None)
+        rows_removed, workbooks_fully_deleted = (
+            await purge_service.remove_exported_rows_from_workbooks(exported_rows)
+        )
+        await db.documents.delete_many({"_id": {"$in": doc_ids}})
+        await db.corrections.delete_many({"documentId": {"$in": doc_ids}})
+        await db.exportedrows.delete_many({"documentId": {"$in": doc_ids}})
+
+    return len(doc_ids), rows_removed, workbooks_fully_deleted
+
+
+@router.delete("/users/{user_id}/purge-range")
+@limiter.shared_limit(NUKE_RATE_LIMIT, scope=NUKE_RATE_SCOPE, key_func=user_or_ip_key)
+async def admin_purge_user_range(
+    request: Request,
+    user_id: PyObjectId,
+    body: AdminAgeRangeRequest,
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    """ "Nuke This User" - age-based only (1/2/3/6/9 months, oldest-first),
+    scoped strictly to this one user's data. Reuses the exact same
+    confirmation gate, surgical row-removal mechanism, and rate limit as the
+    two global variants below - only the filter's userId scope differs."""
+    db = get_database()
+    target = await db.users.find_one({"_id": user_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    _guard_other_admin(target, current_user)
+
+    filter_query, range_end = purge_service.build_age_filter(user_id, body.older_than_months)
+
+    await log_action(
+        current_user.id,
+        "admin_nuke_user_range_attempted",
+        {
+            "mode": "age_range",
+            "scope": "user",
+            "targetUserId": str(user_id),
+            "olderThanMonths": body.older_than_months,
+        },
+    )
+    await purge_service.verify_delete_confirmation(
+        current_user, body, "NUKE USER", "admin_nuke_user_range_blocked"
+    )
+
+    documents_deleted, rows_removed, workbooks_fully_deleted = await _execute_purge(filter_query)
+
+    await log_action(
+        current_user.id,
+        "admin_nuke_user_range_data",
+        {
+            "mode": "age_range",
+            "scope": "user",
+            "targetUserId": str(user_id),
+            "olderThanMonths": body.older_than_months,
+            "dateRangeEnd": range_end,
+            "documentsDeleted": documents_deleted,
+            "rowsRemoved": rows_removed,
+            "workbooksFullyDeleted": workbooks_fully_deleted,
+        },
+    )
+    return {
+        "message": f"{documents_deleted} document(s) permanently deleted for this user.",
+        "documentsDeleted": documents_deleted,
+        "workbooksFullyDeleted": workbooks_fully_deleted,
+        "rowsRemoved": rows_removed,
+    }
+
+
+@router.delete("/users/{user_id}/purge-months")
+@limiter.shared_limit(NUKE_RATE_LIMIT, scope=NUKE_RATE_SCOPE, key_func=user_or_ip_key)
+async def admin_purge_user_months(
+    request: Request,
+    user_id: PyObjectId,
+    body: AdminMonthsRequest,
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    """ "Nuke This User" - Year+Month mode: admin picks an exact year and one
+    or more specific months; ONLY this one user's data in exactly those
+    month(s) is deleted, everything else (other months/years of this user,
+    every other user entirely) is untouched. Reuses the exact same
+    confirmation gate, surgical row-removal mechanism, and rate limit as the
+    global year+month variant below - only the filter's userId scope
+    differs."""
+    db = get_database()
+    target = await db.users.find_one({"_id": user_id})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+    _guard_other_admin(target, current_user)
+
+    filter_query = purge_service.build_months_filter(body.year, body.months, user_id)
+
+    await log_action(
+        current_user.id,
+        "admin_nuke_user_months_attempted",
+        {
+            "mode": "year_months",
+            "scope": "user",
+            "targetUserId": str(user_id),
+            "year": body.year,
+            "months": body.months,
+        },
+    )
+    await purge_service.verify_delete_confirmation(
+        current_user, body, "NUKE USER MONTHS", "admin_nuke_user_months_blocked"
+    )
+
+    documents_deleted, rows_removed, workbooks_fully_deleted = await _execute_purge(filter_query)
+
+    await log_action(
+        current_user.id,
+        "admin_nuke_user_months_data",
+        {
+            "mode": "year_months",
+            "scope": "user",
+            "targetUserId": str(user_id),
+            "year": body.year,
+            "months": body.months,
+            "documentsDeleted": documents_deleted,
+            "rowsRemoved": rows_removed,
+            "workbooksFullyDeleted": workbooks_fully_deleted,
+        },
+    )
+    return {
+        "message": f"{documents_deleted} document(s) permanently deleted for this user.",
+        "documentsDeleted": documents_deleted,
+        "workbooksFullyDeleted": workbooks_fully_deleted,
+        "rowsRemoved": rows_removed,
+    }
+
+
+@router.delete("/purge-range")
+@limiter.shared_limit(NUKE_RATE_LIMIT, scope=NUKE_RATE_SCOPE, key_func=user_or_ip_key)
+async def admin_purge_global_range(
+    request: Request,
+    body: AdminAgeRangeRequest,
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    """ "Global Nuke" - age-based mode: 1/2/3/6/9 months, oldest-first,
+    applied across EVERY user's data simultaneously. Same body shape as the
+    per-user variant above (build_age_filter(user_id=None, ...) is what
+    turns this global instead of scoped)."""
+    filter_query, range_end = purge_service.build_age_filter(None, body.older_than_months)
+
+    await log_action(
+        current_user.id,
+        "admin_nuke_global_range_attempted",
+        {"mode": "age_range", "scope": "global", "olderThanMonths": body.older_than_months},
+    )
+    await purge_service.verify_delete_confirmation(
+        current_user, body, "NUKE ALL RANGE", "admin_nuke_global_range_blocked"
+    )
+
+    documents_deleted, rows_removed, workbooks_fully_deleted = await _execute_purge(filter_query)
+
+    await log_action(
+        current_user.id,
+        "admin_nuke_global_range_data",
+        {
+            "mode": "age_range",
+            "scope": "global",
+            "olderThanMonths": body.older_than_months,
+            "dateRangeEnd": range_end,
+            "documentsDeleted": documents_deleted,
+            "rowsRemoved": rows_removed,
+            "workbooksFullyDeleted": workbooks_fully_deleted,
+        },
+    )
+    return {
+        "message": f"{documents_deleted} document(s) permanently deleted across all users.",
+        "documentsDeleted": documents_deleted,
+        "workbooksFullyDeleted": workbooks_fully_deleted,
+        "rowsRemoved": rows_removed,
+    }
+
+
+@router.delete("/purge-months")
+@limiter.shared_limit(NUKE_RATE_LIMIT, scope=NUKE_RATE_SCOPE, key_func=user_or_ip_key)
+async def admin_purge_global_months(
+    request: Request,
+    body: AdminMonthsRequest,
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    """ "Global Nuke" - Year+Month mode: admin picks an exact year and one or
+    more specific months; ALL users' data in exactly those month(s) is
+    deleted, everything else (other months of the same year, every other
+    user's data outside the range) is untouched. Always global - there is no
+    per-user version of this mode."""
+    filter_query = purge_service.build_months_filter(body.year, body.months)
+
+    await log_action(
+        current_user.id,
+        "admin_nuke_global_months_attempted",
+        {"mode": "year_months", "scope": "global", "year": body.year, "months": body.months},
+    )
+    await purge_service.verify_delete_confirmation(
+        current_user, body, "NUKE ALL MONTHS", "admin_nuke_global_months_blocked"
+    )
+
+    documents_deleted, rows_removed, workbooks_fully_deleted = await _execute_purge(filter_query)
+
+    await log_action(
+        current_user.id,
+        "admin_nuke_global_months_data",
+        {
+            "mode": "year_months",
+            "scope": "global",
+            "year": body.year,
+            "months": body.months,
+            "documentsDeleted": documents_deleted,
+            "rowsRemoved": rows_removed,
+            "workbooksFullyDeleted": workbooks_fully_deleted,
+        },
+    )
+    return {
+        "message": f"{documents_deleted} document(s) permanently deleted across all users.",
+        "documentsDeleted": documents_deleted,
+        "workbooksFullyDeleted": workbooks_fully_deleted,
+        "rowsRemoved": rows_removed,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Documents (cross-user)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/documents")
+async def list_documents(
+    user_id: str | None = Query(default=None, alias="userId"),
+    page: int | None = Query(default=None),
+    limit: int | None = Query(default=None),
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    db = get_database()
+    lim, pg, skip = _pagination(page, limit)
+    filt: dict = {"isDeleted": {"$ne": True}}
+    if user_id:
+        try:
+            filt["userId"] = ObjectId(user_id)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid userId.") from None
+
+    await log_admin_access(current_user.id, filt.get("userId"), "documents", "list")
+    total_documents = await db.documents.count_documents(filt)
+    cursor = db.documents.find(filt).sort("createdAt", -1).skip(skip).limit(lim)
+    docs = await cursor.to_list(length=None)
+    owner_ids = {d["userId"] for d in docs}
+    owners = {
+        o["_id"]: o
+        async for o in db.users.find({"_id": {"$in": list(owner_ids)}}, {"username": 1, "email": 1})
+    }
+    documents = [_serialize_document(d, owners.get(d["userId"])) for d in docs]
+    return {
+        "documents": documents,
+        "totalDocuments": total_documents,
+        "totalPages": max(1, -(-total_documents // lim)),
+        "currentPage": pg,
+    }
+
+
+@router.patch("/documents/{doc_id}")
+async def correct_document_as_admin(
+    doc_id: PyObjectId, body: CorrectRequest, current_user: CurrentUser = Depends(require_admin)
+) -> dict:
+    field = body.field
+    check_request(field, body.value)
+
+    db = get_database()
+    doc = await db.documents.find_one({"_id": doc_id, "isDeleted": {"$ne": True}})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    value = validate_correction(doc, field, body.value)
+    if not await apply_correction(db, doc, field, value):
+        raise HTTPException(status_code=409, detail=CHANGED_MSG)
+    await log_action(
+        current_user.id,
+        "document_corrected",
+        {"documentId": str(doc_id), "field": field, "byAdmin": True},
+    )
+
+    updated = await db.documents.find_one({"_id": doc_id})
+    assert updated is not None
+    return {"message": "Field corrected successfully.", "document": _serialize_document(updated)}
+
+
+@router.delete("/documents/{doc_id}")
+async def delete_document_as_admin(
+    doc_id: PyObjectId, current_user: CurrentUser = Depends(require_admin)
+) -> dict:
+    """Admin equivalent of the user-scoped "Delete" action - full, permanent
+    delete of both the GridFS file and the Document record (cross-user),
+    same contract as documents/router.py::delete_document. No soft-delete/
+    hidden state is ever set. ExportedRow/export-history entries are
+    deliberately left untouched, same as the user-scoped route."""
+    db = get_database()
+    doc = await db.documents.find_one({"_id": doc_id, "isDeleted": {"$ne": True}})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    cleanup_failed = False
+    if doc.get("gridFsFileId"):
+        try:
+            await delete_file(doc["gridFsFileId"])
+        except Exception as exc:  # noqa: BLE001
+            await record_orphaned_file(
+                doc["gridFsFileId"], doc["_id"], doc["userId"], "admin_document_deleted", exc
+            )
+            cleanup_failed = True
+
+    await db.documents.delete_one({"_id": doc_id})
+    await db.corrections.delete_many({"documentId": doc_id})
+    await log_action(
+        current_user.id,
+        "document_deleted",
+        {"documentId": str(doc_id), "ownerUserId": str(doc["userId"]), "byAdmin": True},
+    )
+    message = (
+        "Document permanently deleted."
+        if not cleanup_failed
+        else (
+            "Document permanently deleted, but the original file could not be fully cleaned "
+            "up from storage. Flagged in Orphaned Files for follow-up."
+        )
+    )
+    return {"message": message, "gridFsCleanupFailed": cleanup_failed}
+
+
+@router.post("/documents/{doc_id}/purge-file")
+async def purge_document_file_as_admin(
+    doc_id: PyObjectId, current_user: CurrentUser = Depends(require_admin)
+) -> dict:
+    """Admin equivalent of the user-scoped "File Delete" action - permanently
+    removes the stored original file from GridFS, cross-user, leaving the
+    Document record's extracted metadata untouched. A GridFS failure does
+    NOT block the admin's action (filePurged is still set) - it's tracked
+    in orphanedfiles and surfaced via gridFsCleanupFailed, same contract as
+    the user-scoped purge-file endpoint."""
+    db = get_database()
+    doc = await db.documents.find_one({"_id": doc_id, "isDeleted": {"$ne": True}})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    if doc.get("filePurged"):
+        raise HTTPException(
+            status_code=400, detail="This document's original file has already been removed."
+        )
+    if not doc.get("gridFsFileId"):
+        raise HTTPException(status_code=400, detail="No original file is stored for this document.")
+
+    cleanup_failed = False
+    try:
+        await delete_file(doc["gridFsFileId"])
+    except Exception as exc:  # noqa: BLE001
+        await record_orphaned_file(
+            doc["gridFsFileId"], doc["_id"], doc["userId"], "admin_purge_file", exc
+        )
+        cleanup_failed = True
+
+    now = datetime.now(UTC)
+    await db.documents.update_one(
+        {"_id": doc_id}, {"$set": {"filePurged": True, "filePurgedAt": now, "updatedAt": now}}
+    )
+    await log_action(
+        current_user.id,
+        "document_file_purged",
+        {"documentId": str(doc_id), "ownerUserId": str(doc["userId"]), "byAdmin": True},
+    )
+    message = (
+        "Original file permanently removed. Extracted data remains fully accessible."
+        if not cleanup_failed
+        else (
+            "Document data was removed, but the original file could not be fully cleaned up "
+            "from storage. Flagged in Orphaned Files for follow-up."
+        )
+    )
+    return {"message": message, "gridFsCleanupFailed": cleanup_failed}
+
+
+# ---------------------------------------------------------------------------
+# Orphaned files (GridFS deletions that failed and were tracked instead of
+# silently swallowed - see app.core.orphaned_files.record_orphaned_file)
+# ---------------------------------------------------------------------------
+
+
+def _serialize_orphaned_file(record: dict, owner: dict | None) -> dict:
+    return {
+        "id": str(record["_id"]),
+        "gridFsFileId": str(record["gridFsFileId"]),
+        "documentId": str(record["documentId"]) if record.get("documentId") else None,
+        "userId": str(record["userId"]) if record.get("userId") else None,
+        "context": record.get("context"),
+        "errorType": record.get("errorType"),
+        "errorMessage": record.get("errorMessage"),
+        "attemptCount": record.get("attemptCount", 1),
+        "createdAt": record.get("createdAt"),
+        "updatedAt": record.get("updatedAt"),
+        "owner": (
+            {"id": str(owner["_id"]), "username": owner["username"], "email": owner["email"]}
+            if owner
+            else None
+        ),
+    }
+
+
+@router.get("/orphaned-files")
+async def list_orphaned_files(
+    page: int | None = Query(default=None),
+    limit: int | None = Query(default=None),
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    db = get_database()
+    lim, pg, skip = _pagination(page, limit)
+    total = await db.orphanedfiles.count_documents({})
+    cursor = db.orphanedfiles.find({}).sort("createdAt", -1).skip(skip).limit(lim)
+    records = await cursor.to_list(length=None)
+    owner_ids = {r["userId"] for r in records if r.get("userId")}
+    owners = {
+        o["_id"]: o
+        async for o in db.users.find({"_id": {"$in": list(owner_ids)}}, {"username": 1, "email": 1})
+    }
+    return {
+        "orphanedFiles": [
+            _serialize_orphaned_file(r, owners.get(r.get("userId"))) for r in records
+        ],
+        "totalOrphanedFiles": total,
+        "totalPages": max(1, -(-total // lim)),
+        "currentPage": pg,
+    }
+
+
+@router.post("/orphaned-files/{orphan_id}/retry")
+async def retry_orphaned_file(
+    orphan_id: PyObjectId, current_user: CurrentUser = Depends(require_admin)
+) -> dict:
+    """Re-attempts the GridFS delete. Success removes the tracking record
+    entirely; failure updates it in place (record_orphaned_file upserts by
+    gridFsFileId) with the new error/timestamp rather than duplicating it."""
+    db = get_database()
+    record = await db.orphanedfiles.find_one({"_id": orphan_id})
+    if not record:
+        raise HTTPException(status_code=404, detail="Orphaned file record not found.")
+
+    try:
+        await delete_file(record["gridFsFileId"])
+    except Exception as exc:  # noqa: BLE001
+        await record_orphaned_file(
+            record["gridFsFileId"],
+            record.get("documentId"),
+            record.get("userId"),
+            record.get("context") or "retry",
+            exc,
+        )
+        await log_action(
+            current_user.id, "orphaned_file_retry_failed", {"orphanId": str(orphan_id)}
+        )
+        return {"success": False, "message": "Retry failed - this file still could not be deleted."}
+
+    await db.orphanedfiles.delete_one({"_id": orphan_id})
+    await log_action(current_user.id, "orphaned_file_retry_succeeded", {"orphanId": str(orphan_id)})
+    return {"success": True, "message": "File deleted successfully. Removed from Orphaned Files."}
+
+
+@router.delete("/orphaned-files/{orphan_id}")
+async def dismiss_orphaned_file(
+    orphan_id: PyObjectId, current_user: CurrentUser = Depends(require_admin)
+) -> dict:
+    """Removes the tracking record without attempting another delete - for
+    when an admin has verified/handled the file some other way."""
+    db = get_database()
+    result = await db.orphanedfiles.delete_one({"_id": orphan_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Orphaned file record not found.")
+    await log_action(current_user.id, "orphaned_file_dismissed", {"orphanId": str(orphan_id)})
+    return {"message": "Orphaned file record dismissed."}
+
+
+# ---------------------------------------------------------------------------
+# Workbooks (cross-user)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/workbooks")
+async def list_workbooks_admin(current_user: CurrentUser = Depends(require_admin)) -> dict:
+    db = get_database()
+    await log_admin_access(current_user.id, None, "workbooks", "list")
+    cursor = db.workbooks.find({}).sort([("year", -1), ("createdAt", -1)])
+    workbooks = await cursor.to_list(length=None)
+    owner_ids = {wb["userId"] for wb in workbooks}
+    owners = {
+        o["_id"]: o
+        async for o in db.users.find({"_id": {"$in": list(owner_ids)}}, {"username": 1, "email": 1})
+    }
+    out = []
+    for wb in workbooks:
+        owner = owners.get(wb["userId"])
+        out.append(
+            {
+                "id": str(wb["_id"]),
+                "userId": str(wb["userId"]),
+                "year": wb["year"],
+                "filename": wb["filename"],
+                "isActive": wb["isActive"],
+                "archivedAt": wb.get("archivedAt"),
+                "owner": (
+                    {
+                        "id": str(owner["_id"]),
+                        "username": owner["username"],
+                        "email": owner["email"],
+                    }
+                    if owner
+                    else None
+                ),
+            }
+        )
+    return {"workbooks": out}
+
+
+@router.get("/workbooks/{workbook_id}/download")
+async def download_workbook_admin(
+    workbook_id: PyObjectId, current_user: CurrentUser = Depends(require_admin)
+) -> FileResponse:
+    db = get_database()
+    wb = await db.workbooks.find_one({"_id": workbook_id})
+    if not wb:
+        raise HTTPException(status_code=404, detail="Workbook not found.")
+
+    target = excel_service.file_path(_physical_workbook_filename(wb["userId"], wb["filename"]))
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Workbook file not found on the server.")
+    await log_admin_access(current_user.id, wb["userId"], "workbook", "download", workbook_id)
+
+    download_name = wb["filename"] if wb["filename"].endswith(".xlsx") else f"{wb['filename']}.xlsx"
+    return FileResponse(
+        path=target,
+        filename=download_name,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Exports (cross-user)
+# ---------------------------------------------------------------------------
+
+
+@router.get("/exports")
+async def list_exports_admin(
+    user_id: str | None = Query(default=None, alias="userId"),
+    page: int | None = Query(default=None),
+    limit: int | None = Query(default=None),
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    db = get_database()
+    lim, pg, skip = _pagination(page, limit)
+    filt: dict = {}
+    if user_id:
+        try:
+            filt["userId"] = ObjectId(user_id)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid userId.") from None
+
+    await log_admin_access(current_user.id, filt.get("userId"), "export_rows", "list")
+    total_exports = await db.exportedrows.count_documents(filt)
+    cursor = db.exportedrows.find(filt).sort("exportedAt", -1).skip(skip).limit(lim)
+    rows = await cursor.to_list(length=None)
+    workbook_ids = {r["workbookId"] for r in rows if r.get("workbookId")}
+    workbooks = {
+        w["_id"]: w
+        async for w in db.workbooks.find(
+            {"_id": {"$in": list(workbook_ids)}}, {"filename": 1, "year": 1}
+        )
+    }
+    out = []
+    for r in rows:
+        wb = workbooks.get(r.get("workbookId"))
+        out.append(
+            {
+                "id": str(r["_id"]),
+                "documentId": str(r["documentId"]),
+                "userId": str(r["userId"]),
+                "workbook": {"filename": wb["filename"], "year": wb["year"]} if wb else None,
+                "documentType": r["documentType"],
+                "taxInvoiceNo": r.get("taxInvoiceNo"),
+                "referenceNo": r.get("referenceNo"),
+                "number": r.get("number"),
+                "date": r.get("date"),
+                "exportedAt": r["exportedAt"],
+            }
+        )
+    return {
+        "exports": out,
+        "totalExports": total_exports,
+        "totalPages": max(1, -(-total_exports // lim)),
+        "currentPage": pg,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Audit logs
+# ---------------------------------------------------------------------------
+
+
+@router.get("/logs")
+async def list_logs(
+    action: str | None = Query(default=None),
+    user_id: str | None = Query(default=None, alias="userId"),
+    page: int | None = Query(default=None),
+    limit: int | None = Query(default=None),
+    current_user: CurrentUser = Depends(require_admin),
+) -> dict:
+    db = get_database()
+    lim, pg, skip = _pagination(page, limit)
+    filt: dict = {}
+    if action:
+        filt["action"] = action
+    if user_id:
+        try:
+            filt["userId"] = ObjectId(user_id)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid userId.") from None
+
+    total_logs = await db.auditlogs.count_documents(filt)
+    cursor = db.auditlogs.find(filt).sort("createdAt", -1).skip(skip).limit(lim)
+    logs = await cursor.to_list(length=None)
+    owner_ids = {log_["userId"] for log_ in logs}
+    owners = {
+        o["_id"]: o
+        async for o in db.users.find({"_id": {"$in": list(owner_ids)}}, {"username": 1, "email": 1})
+    }
+    out = []
+    for log_ in logs:
+        owner = owners.get(log_["userId"])
+        out.append(
+            {
+                "id": str(log_["_id"]),
+                "action": log_["action"],
+                "context": log_.get("context", {}),
+                "createdAt": log_.get("createdAt"),
+                "user": (
+                    {
+                        "id": str(owner["_id"]),
+                        "username": owner["username"],
+                        "email": owner["email"],
+                    }
+                    if owner
+                    else None
+                ),
+            }
+        )
+    return {
+        "logs": out,
+        "totalLogs": total_logs,
+        "totalPages": max(1, -(-total_logs // lim)),
+        "currentPage": pg,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Telemetry
+# ---------------------------------------------------------------------------
+
+
+SERIES_DAYS = 30
+MAINTENANCE_ACTIONS = [
+    "admin_nuke_global_range_data",
+    "admin_nuke_global_months_data",
+    "admin_nuke_user_range_data",
+    "admin_nuke_user_months_data",
+    "document_file_purged",
+    "orphaned_file_dismissed",
+    "orphaned_file_retry_succeeded",
+    "user_deleted",
+]
+_PROCESS_START = datetime.now(UTC)
+
+FEED_SIZE = 10
+FEED_FETCH = 60  # raw events read to build FEED_SIZE grouped items
+FEED_GROUP_WINDOW = timedelta(minutes=10)
+
+
+def _feed_items(events: list[dict], names: dict) -> list[dict]:
+    """Newest-first audit events -> at most FEED_SIZE items. Consecutive identical actions by the
+    same user within FEED_GROUP_WINDOW collapse into one item with a count ("saved 3 documents").
+    Only a plain-text target email and the user's name leave the server - never the raw context."""
+    items: list[dict] = []
+    for ev in events:
+        uid = ev.get("userId")
+        when = ev.get("createdAt")
+        last = items[-1] if items else None
+        if (
+            last is not None
+            and last["_uid"] == uid
+            and last["action"] == ev.get("action")
+            and isinstance(when, datetime)
+            and isinstance(last["_oldest"], datetime)
+            and last["_oldest"] - when <= FEED_GROUP_WINDOW
+        ):
+            last["count"] += 1
+            last["_oldest"] = when
+            continue
+        if len(items) >= FEED_SIZE:
+            break
+        raw_ctx = ev.get("context")
+        ctx: dict = raw_ctx if isinstance(raw_ctx, dict) else {}
+        target = ctx.get("targetEmail")
+        owner = names.get(uid)
+        items.append(
+            {
+                "id": str(ev["_id"]),
+                "action": str(ev.get("action", "")),
+                "createdAt": when,
+                "user": {"id": str(owner["_id"]), "username": owner["username"]} if owner else None,
+                "targetEmail": target if isinstance(target, str) else None,
+                "count": 1,
+                "_uid": uid,
+                "_oldest": when,
+            }
+        )
+    for it in items:
+        it.pop("_uid", None)
+        it.pop("_oldest", None)
+    return items
+
+
+async def _gather_untyped(*aws: Any) -> list[Any]:
+    """asyncio.gather, but typed loosely: its overloads stop at 6 awaitables."""
+    return list(await asyncio.gather(*aws))
+
+
+async def _daily_series(
+    db: AsyncIOMotorDatabase,
+    collection: str,
+    field: str,
+    days: list[str],
+    extra: dict | None = None,
+) -> list[int]:
+    """Per-day counts for the given IST day strings via ONE aggregation; missing days are 0."""
+    start = ist_midnight_utc(datetime.fromisoformat(days[0]))
+    rows = db[collection].aggregate(
+        [
+            {"$match": {**(extra or {}), field: {"$gte": start}}},
+            {
+                "$group": {
+                    "_id": {
+                        "$dateToString": {
+                            "format": "%Y-%m-%d",
+                            "date": f"${field}",
+                            "timezone": IST_OFFSET_STRING,
+                        }
+                    },
+                    "n": {"$sum": 1},
+                }
+            },
+        ]
+    )
+    by_day = {r["_id"]: r["n"] async for r in rows}
+    return [by_day.get(d, 0) for d in days]
+
+
+@router.get("/telemetry")
+async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
+    """Dashboard numbers. Count queries only (never loads every document), usernames for the
+    feed are resolved in ONE query."""
+    db = get_database()
+    now = datetime.now(UTC)  # trend/activity windows below are rolling, so timezone is irrelevant
+    day_ago = now - timedelta(hours=24)
+    week_ago = now - timedelta(days=7)
+    two_weeks_ago = now - timedelta(days=14)
+    live = {"isDeleted": {"$ne": True}}
+
+    async def window(collection: str, field: str, extra: dict | None = None) -> dict:
+        base = extra or {}
+        coll = db[collection]
+        cur, prev = await asyncio.gather(
+            coll.count_documents({**base, field: {"$gte": week_ago}}),
+            coll.count_documents({**base, field: {"$gte": two_weeks_ago, "$lt": week_ago}}),
+        )
+        return {"current": cur, "previous": prev}
+
+    async def pending_oldest_users() -> list[dict]:
+        return [
+            {
+                "id": str(u["_id"]),
+                "username": u["username"],
+                "email": u["email"],
+                "createdAt": u.get("createdAt"),
+            }
+            async for u in db.users.find(
+                _status_query("pending"), {"username": 1, "email": 1, "createdAt": 1}
+            )
+            .sort("createdAt", 1)
+            .limit(5)
+        ]
+
+    async def recent_events(query: dict, n: int) -> tuple[list[dict], dict]:
+        """Newest-first audit events + their authors' usernames (one extra query)."""
+        events = await db.auditlogs.find(query).sort("createdAt", -1).limit(n).to_list(n)
+        ids = list({e["userId"] for e in events if e.get("userId")})
+        names = {o["_id"]: o async for o in db.users.find({"_id": {"$in": ids}}, {"username": 1})}
+        return events, names
+
+    today = now_ist().date()  # series buckets are IST calendar days
+    days = [(today - timedelta(days=i)).isoformat() for i in range(SERIES_DAYS - 1, -1, -1)]
+    # Independent reads run concurrently: each is a network round trip to the database.
+    (
+        total_users,
+        n_uploaded,
+        n_processed,
+        n_failed,
+        n_tax,
+        n_challan,
+        total_documents,
+        total_exports,
+        activity_24h,
+        activity_7d,
+        pending_count,
+        pending_oldest,
+        (events, names),
+        (maintenance, maint_names),
+        orphaned,
+        users_series,
+        docs_series,
+        exports_series,
+        processed_window,
+        users_trend,
+        docs_trend,
+        exports_trend,
+        password_requests_open,
+    ) = await _gather_untyped(
+        db.users.count_documents({}),
+        *(
+            db.documents.count_documents({**live, "uploadStatus": s})
+            for s in ("uploaded", "processed", "failed")
+        ),
+        *(
+            db.documents.count_documents({**live, "documentType": t})
+            for t in ("Tax Invoice", "Delivery Challan")
+        ),
+        db.documents.count_documents(live),
+        db.exportedrows.count_documents({}),
+        db.auditlogs.count_documents({"createdAt": {"$gte": day_ago}}),
+        db.auditlogs.count_documents({"createdAt": {"$gte": week_ago}}),
+        db.users.count_documents(_status_query("pending")),
+        pending_oldest_users(),
+        # "admin_access" (an admin opened another user's data) is audit noise, not dashboard news.
+        recent_events({"action": {"$ne": "admin_access"}}, FEED_FETCH),
+        recent_events({"action": {"$in": MAINTENANCE_ACTIONS}}, 5),
+        db.orphanedfiles.count_documents({}),
+        _daily_series(db, "users", "createdAt", days),
+        _daily_series(db, "documents", "createdAt", days, live),
+        _daily_series(db, "exportedrows", "exportedAt", days),
+        window("documents", "processedAt", {**live, "uploadStatus": "processed"}),
+        window("users", "createdAt"),
+        window("documents", "createdAt", live),
+        window("exportedrows", "exportedAt"),
+        db.passwordresetrequests.count_documents({"status": "open"}),
+    )
+    by_status = {"uploaded": n_uploaded, "processed": n_processed, "failed": n_failed}
+    by_type = {"Tax Invoice": n_tax, "Delivery Challan": n_challan}
+    finished = n_processed + n_failed
+    ocr_failure_rate = round((n_failed / finished) * 1000) / 10 if finished > 0 else 0
+
+    def maint_user(e: dict) -> dict | None:
+        o = maint_names.get(e.get("userId"))
+        return {"id": str(o["_id"]), "username": o["username"]} if o else None
+
+    return {
+        "series": {
+            "days": days,
+            "users": users_series,
+            "documents": docs_series,
+            "exports": exports_series,
+        },
+        "processedDocuments": {"total": n_processed, **processed_window},
+        "recentMaintenance": [
+            {
+                "id": str(e["_id"]),
+                "action": e["action"],
+                "createdAt": e.get("createdAt"),
+                "user": maint_user(e),
+            }
+            for e in maintenance
+        ],
+        "totalUsers": total_users,
+        "totalDocuments": total_documents,
+        "totalExports": total_exports,
+        "documentsByStatus": by_status,
+        "documentsByType": by_type,
+        "ocrFailureRate": ocr_failure_rate,
+        "recentActivity": {"last24h": activity_24h, "last7d": activity_7d},
+        "pendingUsers": {"count": pending_count, "oldest": pending_oldest},
+        "passwordRequests": {"count": password_requests_open},
+        "orphanedFiles": orphaned,
+        "failedDocuments": n_failed,
+        "trends": {"users": users_trend, "documents": docs_trend, "exports": exports_trend},
+        "activityFeed": _feed_items(events, names),
+    }
+
+
+# ---------------------------------------------------------------------------
+# System health
+# ---------------------------------------------------------------------------
+
+
+def _workbook_storage() -> dict:
+    """Bytes/count of real *.xlsx workbooks in the exports dir (ignores .lock and .tmp<pid>.xlsx
+    scratch files). A missing or unreadable dir is simply 0/0."""
+    total = count = 0
+    try:
+        for f in excel_service.EXPORT_DIR.iterdir():
+            if f.name.endswith(".xlsx") and not re.search(r"\.tmp\d*\.xlsx$", f.name):
+                total += f.stat().st_size
+                count += 1
+    except OSError:
+        pass
+    return {"bytes": total, "count": count}
+
+
+@router.get("/system")
+async def system_status(current_user: CurrentUser = Depends(require_admin)) -> dict:
+    db = get_database()
+    now = datetime.now(UTC)
+    ok = True
+    t0 = time.perf_counter()
+    try:
+        await db.command("ping")
+    except Exception:  # noqa: BLE001
+        ok = False
+    ping_ms = round((time.perf_counter() - t0) * 1000)
+    files = {"bytes": 0, "count": 0}
+    try:
+        agg = (
+            await db["fs.files"]
+            .aggregate(
+                [{"$group": {"_id": None, "bytes": {"$sum": "$length"}, "count": {"$sum": 1}}}]
+            )
+            .to_list(1)
+        )
+        if agg:
+            files = {"bytes": int(agg[0]["bytes"]), "count": int(agg[0]["count"])}
+    except Exception:  # noqa: BLE001
+        pass
+    return {
+        "db": {"ok": ok, "pingMs": ping_ms},
+        "ocrLockWedged": ocr_lock_status()["wedged"],
+        "ocrEngine": ocr_engine_status(),
+        "serverStartedAt": _PROCESS_START.isoformat(),
+        "uptimeSeconds": int((now - _PROCESS_START).total_seconds()),
+        "storage": {"documentFiles": files, "workbookFiles": _workbook_storage()},
+        "checkedAt": now.isoformat(),
+    }
