@@ -340,7 +340,7 @@ export default function UsersView() {
         {deletingUser && (
           <ConfirmModal
             title="Delete this user?"
-            message={`Delete ${deletingUser.username} (${deletingUser.email})? This permanently removes their documents, workbooks, and exports. This cannot be undone.`}
+            message={`Delete ${deletingUser.username} (${deletingUser.email})? This permanently removes their documents. This cannot be undone.`}
             onConfirm={() => deleteUser(deletingUser)}
             onClose={() => setDeletingUser(null)}
             busy={busyId === deletingUser.id}

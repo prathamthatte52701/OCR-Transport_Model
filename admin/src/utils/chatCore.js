@@ -154,16 +154,9 @@ function plural(n, one, many) {
   return `${n} ${n === 1 ? one : many}`
 }
 
-export function buildSummaryText({ processedToday, processedTodayByType }) {
+export function buildSummaryText({ processedToday }) {
   const total = processedToday || 0
   const head = `Today I processed ${plural(total, 'document', 'documents')}`
   if (total === 0) return `${head}.`
-  const tax = processedTodayByType?.['Tax Invoice'] || 0
-  const challan = processedTodayByType?.['Delivery Challan'] || 0
-  const parts = []
-  if (tax > 0) parts.push(plural(tax, 'Tax Invoice', 'Tax Invoices'))
-  if (challan > 0) parts.push(plural(challan, 'Delivery Challan', 'Delivery Challans'))
-  const other = total - tax - challan
-  if (other > 0) parts.push(`${other} other`)
-  return `${head}: ${parts.join(', ')}.`
+  return `${head}.`
 }

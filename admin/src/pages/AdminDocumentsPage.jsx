@@ -12,20 +12,38 @@ import { statusTone } from '../utils/status'
 
 const PAGE_SIZE = 30
 
-const FIELDS_BY_TYPE = {
-  'Tax Invoice': [
-    { key: 'taxInvoiceNo', label: 'Tax Invoice No.' },
-    { key: 'referenceNo', label: 'Reference No.' },
-    { key: 'date', label: 'Date' },
-  ],
-  'Delivery Challan': [
-    { key: 'number', label: 'Number' },
-    { key: 'date', label: 'Date' },
-  ],
-}
+const FIELDS = [
+  { key: 'operatorName', label: 'Operator Name' },
+  { key: 'operatorGstin', label: 'Operator GSTIN' },
+  { key: 'receiptNumber', label: 'Receipt Number' },
+  { key: 'date', label: 'Date' },
+  { key: 'toPlace', label: 'To Place' },
+  { key: 'consigneeName', label: 'Consignee Name' },
+  { key: 'consignorName', label: 'Consignor Name' },
+  { key: 'packageCount', label: 'Package Count' },
+  { key: 'paymentMode', label: 'Payment Mode' },
+  { key: 'totalAmount', label: 'Total Amount' },
+  { key: 'preparedBy', label: 'Prepared By' },
+  { key: 'time', label: 'Time' },
+  { key: 'fromPlace', label: 'From Place' },
+  { key: 'deliveryAddress', label: 'Delivery Address' },
+  { key: 'consignorGstin', label: 'Consignor GSTIN' },
+  { key: 'consignorPhone', label: 'Consignor Phone' },
+  { key: 'consigneeGstin', label: 'Consignee GSTIN' },
+  { key: 'consigneePhone', label: 'Consignee Phone' },
+  { key: 'packageDescription', label: 'Package Description' },
+  { key: 'freight', label: 'Freight' },
+  { key: 'deliveryCharge', label: 'Delivery Charge' },
+  { key: 'demurrage', label: 'Demurrage' },
+  { key: 'sgst', label: 'SGST' },
+  { key: 'cgst', label: 'CGST' },
+  { key: 'igst', label: 'IGST' },
+  { key: 'amountInWords', label: 'Amount In Words' },
+  { key: 'remark', label: 'Remark' },
+]
 
 function EditDocumentModal({ doc, onClose, onSaved }) {
-  const fields = FIELDS_BY_TYPE[doc.documentType] || []
+  const fields = FIELDS
   const [values, setValues] = useState(() => Object.fromEntries(fields.map((f) => [f.key, doc[f.key] || ''])))
   const [savingField, setSavingField] = useState(null)
   const [error, setError] = useState('')
@@ -47,7 +65,7 @@ function EditDocumentModal({ doc, onClose, onSaved }) {
   return (
     <Modal onClose={onClose}>
       <h2 className="mb-1 text-lg font-extrabold text-white">Edit document</h2>
-      <p className="mb-4 truncate text-[13px] text-[var(--muted)]" title={`${doc.documentType} - owned by ${doc.owner?.username || 'unknown'}`}>{doc.documentType} - owned by {doc.owner?.username || 'unknown'}</p>
+      <p className="mb-4 truncate text-[13px] text-[var(--muted)]" title={`Owned by ${doc.owner?.username || 'unknown'}`}>Owned by {doc.owner?.username || 'unknown'}</p>
       <div className="space-y-4">
         {fields.map((f, idx) => (
           <div key={f.key}>
@@ -154,10 +172,7 @@ export default function AdminDocumentsPage() {
     }
   }
 
-  function docNumber(doc) {
-    if (doc.documentType === 'Tax Invoice') return [doc.taxInvoiceNo, doc.referenceNo].filter(Boolean).join(' / ') || '-'
-    return doc.number || '-'
-  }
+  const docNumber = (doc) => doc.receiptNumber || '-'
 
   return (
     <div className="mx-auto max-w-[1560px] px-4 py-6 sm:px-6 lg:px-8">
@@ -181,8 +196,7 @@ export default function AdminDocumentsPage() {
             <thead>
               <tr>
                 <th>Owner</th>
-                <th>Type</th>
-                <th>Number</th>
+                <th>Receipt No.</th>
                 <th>Date</th>
                 <th>Status</th>
                 <th className="text-right">Actions</th>
@@ -192,13 +206,12 @@ export default function AdminDocumentsPage() {
               {documents.map((d) => (
                 <tr key={d._id}>
                   <td><OwnerCell owner={d.owner} /></td>
-                  <td>
+                  <td className="max-w-[220px] truncate text-slate-200" title={docNumber(d)}>
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-slate-200">{d.documentType}</span>
+                      <span>{docNumber(d)}</span>
                       {d.filePurged && <Badge tone="amber">File removed</Badge>}
                     </div>
                   </td>
-                  <td className="max-w-[220px] truncate text-slate-200" title={docNumber(d)}>{docNumber(d)}</td>
                   <td className="whitespace-nowrap text-[var(--muted)]">{d.date || '-'}</td>
                   <td>
                     <Badge tone={statusTone(d.uploadStatus)} dot className="capitalize">{d.uploadStatus}</Badge>
@@ -242,7 +255,7 @@ export default function AdminDocumentsPage() {
         {deletingDoc && (
           <ConfirmModal
             title="Permanently delete this document?"
-            message={`This will PERMANENTLY delete this ${deletingDoc.documentType} document owned by ${deletingDoc.owner?.username || 'unknown'} - both the original file and all its extracted data. This cannot be undone and there is no recovery path.`}
+            message={`This will PERMANENTLY delete this document owned by ${deletingDoc.owner?.username || 'unknown'} - both the original file and all its extracted data. This cannot be undone and there is no recovery path.`}
             confirmLabel="Yes, Delete Permanently"
             onConfirm={() => deleteDoc(deletingDoc)}
             onClose={() => setDeletingDoc(null)}
@@ -253,7 +266,7 @@ export default function AdminDocumentsPage() {
         {purgingDoc && (
           <ConfirmModal
             title="File Delete - permanently remove the original file?"
-            message={`This will permanently delete the original uploaded file for this ${purgingDoc.documentType} document owned by ${purgingDoc.owner?.username || 'unknown'}. The extracted Number/Date data will NOT be affected and will remain fully accessible. This cannot be undone.`}
+            message={`This will permanently delete the original uploaded file for this document owned by ${purgingDoc.owner?.username || 'unknown'}. The extracted data will NOT be affected and will remain fully accessible. This cannot be undone.`}
             confirmLabel="Yes, File Delete"
             onConfirm={() => purgeDocFile(purgingDoc)}
             onClose={() => setPurgingDoc(null)}

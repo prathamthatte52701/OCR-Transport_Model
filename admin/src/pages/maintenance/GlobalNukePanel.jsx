@@ -48,7 +48,7 @@ export default function GlobalNukePanel({ onDeleted }) {
     <div>
       <h3 className="mb-1 text-[16px] font-bold text-white">Global Nuke</h3>
       <p className="mb-4 text-[14px] leading-6 text-rose-100/80">
-        Permanently deletes matching documents (and their exported Excel rows) across EVERY
+        Permanently deletes matching documents across EVERY
         user simultaneously. Not scoped to any one account.
       </p>
 
@@ -127,7 +127,7 @@ export default function GlobalNukePanel({ onDeleted }) {
         {confirmOpen && mode === 'age' && (
           <ConfirmPurgeModal
             title="Confirm global age-based nuke"
-            message={`This will permanently delete documents and exported Excel rows older than ${months} month(s), across EVERY user's account.`}
+            message={`This will permanently delete documents older than ${months} month(s), across EVERY user's account.`}
             phrase="NUKE ALL RANGE"
             purgeFn={(body) => purgeGlobalRange({ ...body, olderThanMonths: months })}
             onClose={() => setConfirmOpen(false)}
@@ -137,7 +137,7 @@ export default function GlobalNukePanel({ onDeleted }) {
         {confirmOpen && mode === 'months' && (
           <ConfirmPurgeModal
             title="Confirm global year+month nuke"
-            message={`This will permanently delete documents and exported Excel rows from ${monthLabel} ${year} only, across EVERY user's account. All other months and years are left completely untouched.`}
+            message={`This will permanently delete documents from ${monthLabel} ${year} only, across EVERY user's account. All other months and years are left completely untouched.`}
             phrase="NUKE ALL MONTHS"
             purgeFn={(body) => purgeGlobalMonths({ ...body, year: Number(year), months: selectedMonths })}
             onClose={() => setConfirmOpen(false)}

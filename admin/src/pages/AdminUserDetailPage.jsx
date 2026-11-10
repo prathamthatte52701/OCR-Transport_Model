@@ -57,7 +57,7 @@ function NukeUserPanel({ userId, username }) {
     <Card variant="danger" className="mb-8 p-6" aria-label="Nuke this user">
       <h2 className="mb-1 text-lg font-bold text-rose-300">Nuke This User</h2>
       <p className="mb-4 text-[14px] text-rose-100/80">
-        Permanently deletes this user&apos;s documents (and their exported Excel rows), scoped
+        Permanently deletes this user&apos;s documents, scoped
         strictly to {username || 'this user'} - every other user&apos;s data is untouched.
       </p>
 
@@ -136,7 +136,7 @@ function NukeUserPanel({ userId, username }) {
         {confirmOpen && mode === 'age' && (
           <ConfirmPurgeModal
             title="Confirm user-scoped nuke"
-            message={`This will permanently delete ALL of ${username || 'this user'}'s documents and exported Excel rows older than ${months} month(s). No other user's data is affected.`}
+            message={`This will permanently delete ALL of ${username || 'this user'}'s documents older than ${months} month(s). No other user's data is affected.`}
             phrase="NUKE USER"
             purgeFn={(body) => api.delete(`/admin/users/${userId}/purge-range`, { data: { ...body, olderThanMonths: months } }).then((res) => res.data)}
             onClose={() => setConfirmOpen(false)}
@@ -146,7 +146,7 @@ function NukeUserPanel({ userId, username }) {
         {confirmOpen && mode === 'months' && (
           <ConfirmPurgeModal
             title="Confirm user-scoped year+month nuke"
-            message={`This will permanently delete ${username || 'this user'}'s documents and exported Excel rows from ${monthLabel} ${year} only. All other months/years and every other user's data are left completely untouched.`}
+            message={`This will permanently delete ${username || 'this user'}'s documents from ${monthLabel} ${year} only. All other months/years and every other user's data are left completely untouched.`}
             phrase="NUKE USER MONTHS"
             purgeFn={(body) => api.delete(`/admin/users/${userId}/purge-months`, { data: { ...body, year: Number(year), months: selectedMonths } }).then((res) => res.data)}
             onClose={() => setConfirmOpen(false)}
@@ -158,15 +158,7 @@ function NukeUserPanel({ userId, username }) {
   )
 }
 
-function docNumber(doc) {
-  if (doc.documentType === 'Tax Invoice') return [doc.taxInvoiceNo, doc.referenceNo].filter(Boolean).join(' / ') || '-'
-  return doc.number || '-'
-}
-
-function exportNumber(row) {
-  if (row.documentType === 'Tax Invoice') return [row.taxInvoiceNo, row.referenceNo].filter(Boolean).join(' / ') || '-'
-  return row.number || '-'
-}
+const docNumber = (doc) => doc.receiptNumber || '-'
 
 // One paginated list of a user's records (documents / exports / logs). Fetch state is keyed
 // so a page/user change shows skeleton rows until the matching response lands, and a
@@ -219,13 +211,10 @@ export default function AdminUserDetailPage() {
   const [reloadNonce, setReloadNonce] = useState(0)
 
   const [docPage, setDocPage] = useState(1)
-  const [expPage, setExpPage] = useState(1)
   const [logPage, setLogPage] = useState(1)
   const docs = useUserSection('/admin/documents', id, docPage)
-  const exps = useUserSection('/admin/exports', id, expPage)
   const logs = useUserSection('/admin/logs', id, logPage)
   const docTotal = docs.data?.totalDocuments || 0
-  const expTotal = exps.data?.totalExports || 0
   const logTotal = logs.data?.totalLogs || 0
 
   useEffect(() => {
@@ -296,31 +285,15 @@ export default function AdminUserDetailPage() {
       )}
 
       <Section
-        title="Documents" count={docTotal} state={docs} page={docPage} onPageChange={setDocPage} cols={5} emptyTitle="No documents."
-        head={<><th>Type</th><th>Number</th><th>Date</th><th>Status</th><th>Uploaded</th></>}
+        title="Documents" count={docTotal} state={docs} page={docPage} onPageChange={setDocPage} cols={4} emptyTitle="No documents."
+        head={<><th>Receipt No.</th><th>Date</th><th>Status</th><th>Uploaded</th></>}
       >
         {(docs.data?.documents || []).map((d) => (
           <tr key={d._id}>
-            <td>{d.documentType}</td>
             <td>{docNumber(d)}</td>
             <td className="text-[var(--muted)]">{d.date || '-'}</td>
             <td><Badge tone={statusTone(d.uploadStatus)}>{cap(d.uploadStatus)}</Badge></td>
             <td className="whitespace-nowrap text-[var(--muted)]">{formatIST(d.createdAt)}</td>
-          </tr>
-        ))}
-      </Section>
-
-      <Section
-        title="Export Activity" count={expTotal} state={exps} page={expPage} onPageChange={setExpPage} cols={5} emptyTitle="No exports."
-        head={<><th>Type</th><th>Number</th><th>Date</th><th>Exported At</th><th>Workbook</th></>}
-      >
-        {(exps.data?.exports || []).map((row) => (
-          <tr key={row.id}>
-            <td>{row.documentType}</td>
-            <td>{exportNumber(row)}</td>
-            <td className="text-[var(--muted)]">{row.date || '-'}</td>
-            <td className="whitespace-nowrap text-[var(--muted)]">{formatIST(row.exportedAt)}</td>
-            <td className="max-w-[220px] truncate" title={row.workbook?.filename}>{row.workbook?.filename || <span className="text-[var(--muted)]">Unknown</span>}</td>
           </tr>
         ))}
       </Section>

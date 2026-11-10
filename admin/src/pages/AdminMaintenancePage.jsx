@@ -83,8 +83,7 @@ function WidgetError({ message, onRetry, className = '' }) {
 function StorageCard({ sys }) {
   if (sys.error && !sys.data) return <WidgetError message={sys.error} onRetry={sys.reload} />
   const docs = sys.data?.storage?.documentFiles || { bytes: 0, count: 0 }
-  const books = sys.data?.storage?.workbookFiles || { bytes: 0, count: 0 }
-  const total = docs.bytes + books.bytes
+  const total = docs.bytes
   return (
     <StatCard
       label="Storage used"
@@ -92,18 +91,17 @@ function StorageCard({ sys }) {
       icon={<DbIcon />}
       loading={sys.loading && !sys.data}
       value={formatBytes(total)}
-      trend={`${plural(docs.count, 'document file', 'document files')}, ${plural(books.count, 'workbook', 'workbooks')}`}
+      trend={`${plural(docs.count, 'document file', 'document files')}`}
     >
       {sys.data && (
         <div
           className="mt-4 flex h-2 overflow-hidden rounded-full bg-white/10"
           role="img"
-          aria-label={`Document files ${formatBytes(docs.bytes)}, workbook files ${formatBytes(books.bytes)}`}
+          aria-label={`Document files ${formatBytes(docs.bytes)}`}
         >
           {total > 0 && (
             <>
               <span style={{ width: `${(docs.bytes / total) * 100}%`, background: PALETTE.violetSoft }} />
-              <span style={{ width: `${(books.bytes / total) * 100}%`, background: PALETTE.blue }} />
             </>
           )}
         </div>
@@ -169,14 +167,12 @@ function StorageOverview({ sys }) {
 
 function StorageBreakdown({ storage }) {
   const docs = storage?.documentFiles || { bytes: 0, count: 0 }
-  const books = storage?.workbookFiles || { bytes: 0, count: 0 }
-  const total = docs.bytes + books.bytes
+  const total = docs.bytes
   if (total === 0) {
-    return <EmptyState title="Nothing stored yet" hint="Document files and workbooks will show up here once users upload and export." />
+    return <EmptyState title="Nothing stored yet" hint="Document files will show up here once users upload." />
   }
   const rows = [
     { name: 'Document files', color: PALETTE.violetSoft, ...docs },
-    { name: 'Workbook files', color: PALETTE.blue, ...books },
   ]
   return (
     <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-5 sm:justify-start">

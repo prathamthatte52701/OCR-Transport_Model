@@ -4,14 +4,8 @@ import api from '../utils/api'
 import { useAdminAuth } from '../context/AdminAuthContext'
 import { useAutoRefresh } from '../hooks/useAutoRefresh'
 import { describeActivity, relativeTime } from '../utils/activity'
-import { PALETTE } from '../utils/palette'
-import { AreaChart, Donut, Gauge } from '../components/charts'
+import { AreaChart, Gauge } from '../components/charts'
 import { Avatar, Badge, Card, ChartCard, EmptyState, ErrorState, PageHeader, Skeleton, StatCard, Trend } from '../components/ui'
-
-const TYPES = [
-  { name: 'Tax Invoice', color: PALETTE.violet },
-  { name: 'Delivery Challan', color: PALETTE.teal },
-]
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v)
 const lastN = (arr, n) => (Array.isArray(arr) && arr.length ? arr.slice(-n) : undefined)
@@ -86,7 +80,6 @@ function QuickAction({ to, icon, title, hint }) {
 
 function Dashboard({ data }) {
   const byStatus = data.documentsByStatus
-  const byType = data.documentsByType
   const series = data.series
   const processed = byStatus?.processed
   const failed = byStatus?.failed
@@ -98,9 +91,6 @@ function Dashboard({ data }) {
   const days = Array.isArray(series?.days) ? series.days : []
   const docSeries = Array.isArray(series?.documents) ? series.documents : []
   const seriesTotal = docSeries.reduce((a, b) => a + b, 0)
-
-  const typeSegs = byType ? TYPES.map((t) => ({ name: t.name, color: t.color, value: byType[t.name] || 0 })) : []
-  const typeTotal = typeSegs.reduce((a, s) => a + s.value, 0)
 
   return (
     <div className="space-y-4">
@@ -121,7 +111,7 @@ function Dashboard({ data }) {
         )}
       </section>
 
-      <section aria-label="Charts" className="grid grid-cols-1 gap-4 @min-[760px]:grid-cols-2 @min-[1000px]:grid-cols-[2fr_1fr_1fr]">
+      <section aria-label="Charts" className="grid grid-cols-1 gap-4 @min-[760px]:grid-cols-2 @min-[1000px]:grid-cols-[2fr_1fr]">
         {days.length > 1 && docSeries.length === days.length && (
           <ChartCard title="Documents over time" className="@min-[760px]:col-span-2 @min-[1000px]:col-span-1">
             <div className="mb-2 flex flex-wrap items-baseline gap-x-3 text-[14px]">
@@ -130,26 +120,6 @@ function Dashboard({ data }) {
               {data.trends?.documents && <span className="font-semibold text-[var(--teal)]"><Trend current={data.trends.documents.current} previous={data.trends.documents.previous} suffix="vs previous 7 days" /></span>}
             </div>
             <AreaChart days={days} values={docSeries} />
-          </ChartCard>
-        )}
-
-        {byType && (
-          <ChartCard title="Document types">
-            {typeTotal === 0 ? (
-              <EmptyState title="No documents yet" hint="Types appear once users upload documents." />
-            ) : (
-              <div className="flex flex-col items-center gap-4">
-                <Donut segments={typeSegs} total={fmt(typeTotal)} size={160} />
-                <ul className="w-full space-y-2">
-                  {typeSegs.map((s) => (
-                    <li key={s.name} className="flex items-center justify-between gap-3 text-[14px]">
-                      <span className="flex min-w-0 items-center gap-2 text-[var(--text)]"><span className="h-3 w-3 shrink-0 rounded-full" style={{ background: s.color }} /><span className="truncate">{s.name}</span></span>
-                      <span className="shrink-0 font-bold text-white">{fmt(s.value)} <span className="font-normal text-[var(--muted)]">({Math.round((s.value / typeTotal) * 100)}%)</span></span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
           </ChartCard>
         )}
 
@@ -185,8 +155,8 @@ function LoadingSkeleton() {
   return (
     <div className="space-y-4" aria-busy="true" aria-label="Loading dashboard">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 @min-[1000px]:grid-cols-4">{[0, 1, 2, 3].map((i) => <CardSkeleton key={i} h="h-40" />)}</div>
-      <div className="grid grid-cols-1 gap-4 @min-[760px]:grid-cols-2 @min-[1000px]:grid-cols-[2fr_1fr_1fr]">
-        <CardSkeleton h="h-72" /><CardSkeleton h="h-72" /><CardSkeleton h="h-72" />
+      <div className="grid grid-cols-1 gap-4 @min-[760px]:grid-cols-2 @min-[1000px]:grid-cols-[2fr_1fr]">
+        <CardSkeleton h="h-72" /><CardSkeleton h="h-72" />
       </div>
       <div className="grid grid-cols-1 gap-4 @min-[760px]:grid-cols-2"><CardSkeleton h="h-80" /><CardSkeleton h="h-80" /></div>
     </div>
