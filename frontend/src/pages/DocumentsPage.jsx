@@ -51,8 +51,6 @@ function DocumentsError({ message, onRetry }) {
 }
 
 const PAGE_SIZE = 30
-const DOCUMENT_TYPES = ['Tax Invoice', 'Delivery Challan']
-const ALL_TYPES = 'all'
 const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
 const MONTH_PARAM_RE = /^(20\d{2}|2100)-(0[1-9]|1[0-2])$/
 const CURRENT_YEAR = new Date().getFullYear()
@@ -84,8 +82,7 @@ export default function DocumentsPage() {
   const monthRaw = searchParams.get('month') || ''
   const monthQuery = monthRaw === 'none' || MONTH_PARAM_RE.test(monthRaw) ? monthRaw : ''
   const isSearching = Boolean(numberQuery || dateQuery || monthQuery)
-  const typeParam = searchParams.get('type')
-  const selectedType = typeParam === ALL_TYPES || DOCUMENT_TYPES.includes(typeParam) ? typeParam : DOCUMENT_TYPES[0]
+  const needsReview = searchParams.get('needsReview') === 'true'
   const monthNumber = monthQuery && monthQuery !== 'none' ? monthQuery.slice(5) : ''
   const [yearPick, setYearPick] = useState(monthQuery && monthQuery !== 'none' ? Number(monthQuery.slice(0, 4)) : CURRENT_YEAR)
   const monthLabel = monthQuery === 'none' ? 'no date found' : monthQuery ? `month ${MONTH_NAMES[Number(monthNumber) - 1]} ${monthQuery.slice(0, 4)}` : ''
@@ -98,20 +95,20 @@ export default function DocumentsPage() {
   const [page, setPage] = useState(1)
   const downloadAllMutation = useDownloadAllDocumentsMutation()
 
-  // A new/changed search, group tab, or date range should always land on page 1.
-  const prevSearchKeyRef = useRef(`${numberQuery}|${dateQuery}|${selectedType}|${selectedRange}|${monthQuery}`)
+  // A new/changed search, needs-review filter, or date range should always land on page 1.
+  const prevSearchKeyRef = useRef(`${numberQuery}|${dateQuery}|${needsReview}|${selectedRange}|${monthQuery}`)
   useEffect(() => {
-    const searchKey = `${numberQuery}|${dateQuery}|${selectedType}|${selectedRange}|${monthQuery}`
+    const searchKey = `${numberQuery}|${dateQuery}|${needsReview}|${selectedRange}|${monthQuery}`
     if (searchKey !== prevSearchKeyRef.current) {
       prevSearchKeyRef.current = searchKey
       setPage(1)
     }
-  }, [numberQuery, dateQuery, selectedType, selectedRange, monthQuery])
+  }, [numberQuery, dateQuery, needsReview, selectedRange, monthQuery])
 
   const { data, isLoading, isError, error, refetch } = useDocumentsList({
     page,
     limit: PAGE_SIZE,
-    ...(selectedType !== ALL_TYPES && { documentType: selectedType }),
+    ...(needsReview && { needsReview: true }),
     ...(numberQuery && { number: numberQuery }),
     ...(dateQuery && { date: dateQuery }),
     ...(selectedRange && { range: selectedRange, dayKey }),
@@ -124,15 +121,16 @@ export default function DocumentsPage() {
 
   function clearSearch() {
     const next = new URLSearchParams()
-    if (searchParams.get('type')) next.set('type', searchParams.get('type'))
+    if (needsReview) next.set('needsReview', 'true')
     // The chip is its own visible control: keep it while clearing a search/month, drop it when it is the only filter.
     if (isSearching && searchParams.get('range')) next.set('range', searchParams.get('range'))
     setSearchParams(next)
   }
 
-  function selectType(type) {
+  function toggleNeedsReview() {
     const next = new URLSearchParams(searchParams)
-    next.set('type', type)
+    if (needsReview) next.delete('needsReview')
+    else next.set('needsReview', 'true')
     setSearchParams(next)
   }
 
@@ -238,26 +236,22 @@ export default function DocumentsPage() {
         </div>
 
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex gap-2">
-            {[...DOCUMENT_TYPES, ALL_TYPES].map((type) => (
-              <button
-                key={type}
-                type="button"
-                onClick={() => selectType(type)}
-                className={`flex-1 rounded-2xl border px-4 py-2.5 text-[13.6px] font-bold transition-all sm:flex-none ${
-                  selectedType === type
-                    ? 'border-blue-300/50 bg-blue-500/15 text-blue-100'
-                    : 'border-white/10 bg-white/[0.03] text-slate-400 hover:border-blue-300/25 hover:text-slate-200'
-                }`}
-              >
-                {type === ALL_TYPES ? 'All' : type}
-              </button>
-            ))}
-          </div>
+          <button
+            type="button"
+            onClick={toggleNeedsReview}
+            aria-pressed={needsReview}
+            className={`rounded-2xl border px-4 py-2.5 text-[13.6px] font-bold transition-all ${
+              needsReview
+                ? 'border-amber-300/50 bg-amber-500/15 text-amber-100'
+                : 'border-white/10 bg-white/[0.03] text-slate-400 hover:border-blue-300/25 hover:text-slate-200'
+            }`}
+          >
+            Needs review only
+          </button>
           <div className="inline-flex items-center gap-2.5 rounded-2xl border border-blue-300/25 bg-blue-500/10 px-4 py-2 shadow-[0_0_28px_rgba(37,99,235,0.15)]">
             <span className="text-2xl font-black leading-none text-white">{isLoading ? '-' : totalDocuments}</span>
             <span className="text-[12.6px] font-bold uppercase tracking-wide text-blue-300">
-              {selectedType === ALL_TYPES ? `document${totalDocuments !== 1 ? 's' : ''}` : `${selectedType}${totalDocuments !== 1 ? 's' : ''}`} total
+              {`document${totalDocuments !== 1 ? 's' : ''}`} total
             </span>
           </div>
         </div>
@@ -322,7 +316,7 @@ export default function DocumentsPage() {
           <DocumentsSkeleton />
         ) : isError ? (
           <DocumentsError message={error?.userMessage || 'Could not load your documents. Please try again.'} onRetry={refetch} />
-        ) : (isSearching || selectedRange) && documents.length === 0 ? (
+        ) : (isSearching || selectedRange || needsReview) && documents.length === 0 ? (
           <div className="rounded-[30px] border border-blue-300/12 bg-slate-900/62 p-10 text-center shadow-[0_28px_100px_rgba(2,8,23,0.35)] backdrop-blur-xl">
             <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl border border-blue-300/18 bg-blue-500/10 text-[14.7px] font-black text-blue-200 shadow-[0_0_42px_rgba(37,99,235,0.2)]">N/A</div>
             <h2 className="mt-5 text-2xl font-black text-white">No results found</h2>

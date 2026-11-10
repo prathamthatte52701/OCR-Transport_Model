@@ -20,11 +20,10 @@ const ACTION_LABELS = {
   document_reprocessed: 'Document reprocessed',
 }
 
+import { RECEIPT_FIELDS } from '../utils/receiptFields'
+
 const FIELD_LABELS = {
-  taxInvoiceNo: 'Tax Invoice No.',
-  referenceNo: 'Reference No.',
-  number: 'Delivery Challan No.',
-  date: 'Date',
+  ...Object.fromEntries(RECEIPT_FIELDS.map(({ key, label }) => [key, label])),
 }
 
 const ACTION_BADGE = {
@@ -119,7 +118,7 @@ export default function MyActivityPage() {
                         <td className="whitespace-nowrap px-4 py-3 text-slate-300">
                           {entry.document ? (
                             <Link to={`/documents/${entry.document.id}`} className="font-semibold text-blue-300 hover:underline">
-                              {entry.document.documentType} - {displayNumber(entry.document)}
+                              {displayNumber(entry.document)}
                             </Link>
                           ) : (
                             <span className="text-slate-600">{entry.context?.filename || 'No longer available'}</span>

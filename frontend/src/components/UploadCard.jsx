@@ -2,8 +2,6 @@ import { useRef, useState } from 'react'
 import { Upload, AlertCircle } from 'lucide-react'
 import { validateDocumentFile } from '../utils/documentValidation'
 
-const documentTypes = ['Tax Invoice', 'Delivery Challan']
-
 export default function UploadCard({ onFileSelect, disabled, imageOnly = false }) {
   const inputRef = useRef(null)
   const [dragOver, setDragOver] = useState(false)
@@ -69,15 +67,7 @@ export default function UploadCard({ onFileSelect, disabled, imageOnly = false }
             <p className="mt-2 text-base text-slate-500">or click to browse</p>
           </div>
 
-          <div className="flex max-w-3xl flex-wrap justify-center gap-2">
-            {documentTypes.map((type) => (
-              <span key={type} className="rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-sm font-medium text-slate-400 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-                {type}
-              </span>
-            ))}
-          </div>
-
-          <p className="text-sm font-medium text-slate-500">Upload acknowledgement - JPG, JPEG, PNG, PDF - max 5MB</p>
+          <p className="text-sm font-medium text-slate-500">Upload bus luggage / parcel receipt - JPG, JPEG, PNG, PDF - max 5MB</p>
         </div>
       </div>
 

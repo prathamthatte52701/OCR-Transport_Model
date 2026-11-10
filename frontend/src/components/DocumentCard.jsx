@@ -38,7 +38,7 @@ export default function DocumentCard({ doc, serialNumber }) {
           )}
           <div className="min-w-0">
             <h3 className="truncate text-lg font-black tracking-tight text-white">{doc.autoName}</h3>
-            <p className="mt-1 truncate text-[14.7px] text-slate-500">{doc.documentType}</p>
+            <p className="mt-1 truncate text-[14.7px] text-slate-500">{doc.operatorName}</p>
           </div>
         </div>
         <StatusBadge status={status} />

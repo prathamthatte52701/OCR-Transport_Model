@@ -27,19 +27,17 @@ function uploadLimitMessage(err) {
   throw err
 }
 
-export function uploadDocument(file, documentType) {
+export function uploadDocument(file) {
   const formData = new FormData()
   formData.append('document', file)
-  formData.append('documentType', documentType)
   return api
     .post('/documents/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
     .then((res) => res.data.document, uploadLimitMessage)
 }
 
-export function bulkUploadDocuments(files, documentTypes) {
+export function bulkUploadDocuments(files) {
   const formData = new FormData()
   files.forEach((file) => formData.append('documents', file))
-  documentTypes.forEach((type) => formData.append('documentTypes', type))
   return api
     .post('/documents/bulk-upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } })
     .then((res) => res.data.results, uploadLimitMessage)

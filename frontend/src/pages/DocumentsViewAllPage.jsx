@@ -3,27 +3,18 @@ import { keepPreviousData } from '@tanstack/react-query'
 import { useDocumentsList } from '../hooks/useDocumentsQueries'
 import PageBackground from '../components/PageBackground'
 import BackButton from '../components/BackButton'
+import { RECEIPT_FIELDS } from '../utils/receiptFields'
 
 const PAGE_SIZE = 30
 const EMPTY_DOCUMENTS = []
 
-// Mirrors backend/app/features/excel/service.py::_format_number_cell exactly -
-// this column must show what would actually land in the Excel export for
-// this row, not just "whatever field looks like a number".
-function formatNumberCell(doc) {
-  if (doc.documentType === 'Tax Invoice') {
-    return [doc.taxInvoiceNo, doc.referenceNo].filter(Boolean).join(' / ') || '-'
-  }
-  return doc.number || '-'
-}
-
+// Backend sorts only on receiptNumber (as "number"), date, uploadStatus, edited, createdAt; other columns are plain.
+const SORT_KEY = { receiptNumber: 'number', date: 'date' }
 const COLUMNS = [
-  { key: 'documentType', label: 'Document Type' },
-  { key: 'number', label: 'Number' },
-  { key: 'date', label: 'Date' },
-  { key: 'uploadStatus', label: 'Upload Status' },
-  { key: 'edited', label: 'Edited' },
-  { key: 'createdAt', label: 'Created At' },
+  ...RECEIPT_FIELDS.map(({ key, label }) => ({ key, label, sortKey: SORT_KEY[key] })),
+  { key: 'uploadStatus', label: 'Upload Status', sortKey: 'uploadStatus' },
+  { key: 'edited', label: 'Edited', sortKey: 'edited' },
+  { key: 'createdAt', label: 'Created At', sortKey: 'createdAt' },
 ]
 
 export default function DocumentsViewAllPage() {
@@ -101,14 +92,18 @@ export default function DocumentsViewAllPage() {
                   <tr className="border-b border-white/8 text-[11.6px] font-black uppercase tracking-wide text-slate-500">
                     {COLUMNS.map((col) => (
                       <th key={col.key} className="px-4 py-3">
-                        <button
-                          type="button"
-                          onClick={() => toggleSort(col.key)}
-                          className="inline-flex items-center gap-1 uppercase tracking-wide text-slate-500 hover:text-blue-300"
-                        >
-                          {col.label}
-                          {sortKey === col.key && <span>{sortDir === 'asc' ? '↑' : '↓'}</span>}
-                        </button>
+                        {col.sortKey ? (
+                          <button
+                            type="button"
+                            onClick={() => toggleSort(col.sortKey)}
+                            className="inline-flex items-center gap-1 whitespace-nowrap uppercase tracking-wide text-slate-500 hover:text-blue-300"
+                          >
+                            {col.label}
+                            {sortKey === col.sortKey && <span>{sortDir === 'asc' ? '↑' : '↓'}</span>}
+                          </button>
+                        ) : (
+                          <span className="whitespace-nowrap">{col.label}</span>
+                        )}
                       </th>
                     ))}
                   </tr>
@@ -116,9 +111,9 @@ export default function DocumentsViewAllPage() {
                 <tbody>
                   {documents.map((doc) => (
                     <tr key={doc._id} className="border-b border-white/5 last:border-0">
-                      <td className="px-4 py-3 text-slate-300">{doc.documentType}</td>
-                      <td className="px-4 py-3 text-slate-300">{formatNumberCell(doc)}</td>
-                      <td className="px-4 py-3 text-slate-400">{doc.date || '-'}</td>
+                      {RECEIPT_FIELDS.map(({ key }) => (
+                        <td key={key} className="px-4 py-3 text-slate-300">{doc[key] || '-'}</td>
+                      ))}
                       <td className="px-4 py-3 text-slate-400">{doc.uploadStatus}</td>
                       <td className="px-4 py-3 text-slate-400">{doc.edited ? 'Yes' : 'No'}</td>
                       <td className="px-4 py-3 text-slate-500">{doc.createdAt ? new Date(doc.createdAt).toLocaleString() : '-'}</td>

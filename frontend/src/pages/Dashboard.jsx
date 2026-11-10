@@ -7,13 +7,13 @@ import { formatIST } from '../utils/formatDate'
 import challanRouteVisual from '../assets/transport-bill-route-visual.png'
 
 const features = [
-  { icon: 'UP', title: 'Upload', desc: 'Upload acknowledgement documents in JPG, JPEG, PNG, or PDF.' },
-  { icon: 'OC', title: 'Header OCR', desc: 'Crops to the top header section of the page and extracts text from just that region for maximum accuracy.' },
-  { icon: 'AI', title: 'AI Analysis', desc: 'Identify the document number and date automatically - Tax Invoice or Delivery Challan.' },
-  { icon: 'ED', title: 'Edit', desc: 'Review and correct extracted number/date instantly.' },
+  { icon: 'UP', title: 'Upload', desc: 'Upload bus luggage / parcel receipts in JPG, JPEG, PNG, or single-page PDF.' },
+  { icon: 'OC', title: 'Header OCR', desc: 'Reads the whole receipt page with OCR, including stamps and handwritten parts.' },
+  { icon: 'AI', title: 'AI Analysis', desc: 'Extracts receipt number, date, parties, package count and amounts automatically.' },
+  { icon: 'ED', title: 'Edit', desc: 'Review and correct any extracted field instantly.' },
 ]
 
-const supportedTypes = ['Tax Invoice', 'Delivery Challan']
+const supportedTypes = ['Bus luggage receipt', 'Parcel receipt']
 
 function formatDate(dateStr) {
   if (!dateStr) return 'Not processed'
@@ -121,7 +121,7 @@ function RecentDocumentRow({ doc }) {
       </span>
       <span className="min-w-0">
         <span className="block truncate text-[14.7px] font-bold text-white">{doc.autoName}</span>
-        <span className="mt-1 block truncate text-[12.6px] text-slate-500">{doc.documentType || doc.originalFilename}</span>
+        <span className="mt-1 block truncate text-[12.6px] text-slate-500">{doc.receiptNumber || doc.originalFilename}</span>
         <span className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11.6px] font-medium text-slate-600">
           <span>{formatDate(doc.createdAt)}</span>
           <span>{formatSize(doc.size)}</span>
@@ -218,16 +218,16 @@ function DocumentSearchBar() {
   return (
     <section className="mt-5 rounded-[28px] border border-blue-300/12 bg-slate-900/68 p-5 shadow-2xl shadow-slate-950/30 backdrop-blur-xl sm:p-6">
       <h2 className="text-lg font-black text-white">Search Documents</h2>
-      <p className="mt-1 text-[14.7px] text-slate-500">Find a document by number or date - opens the results in My Documents.</p>
+      <p className="mt-1 text-[14.7px] text-slate-500">Find a document by receipt number, operator, consignor, consignee or date - opens the results in My Documents.</p>
       <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
         <div className="flex-1">
-          <label className="mb-2 block text-[12.6px] font-bold uppercase tracking-[0.1em] text-blue-300">Number</label>
+          <label className="mb-2 block text-[12.6px] font-bold uppercase tracking-[0.1em] text-blue-300">Search</label>
           <input
             type="text"
             value={number}
             onChange={(e) => setNumber(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-            placeholder="e.g. 820268362"
+            placeholder="Receipt no. / operator / consignor / consignee"
             className="w-full rounded-2xl border border-white/10 bg-white/[0.045] px-4 py-3 text-[14.7px] text-white placeholder:text-slate-600 transition-colors focus:border-blue-300/40 focus:outline-none"
           />
         </div>
@@ -257,14 +257,11 @@ export default function Dashboard() {
   const { data: training = { trainedCount: 0, correctedCount: 0 }, isLoading: trainingLoading } = useTrainingStats()
   const loading = docsLoading || trainingLoading
 
-  const byDocumentType = data?.byDocumentType || {}
   const stats = {
     total: data?.total || 0,
     processed: data?.processed || 0,
     failed: data?.failed || 0,
     processedToday: data?.processedToday || 0,
-    taxInvoice: byDocumentType['Tax Invoice'] || 0,
-    deliveryChallan: byDocumentType['Delivery Challan'] || 0,
   }
   const recentDocs = data?.recent || []
 
@@ -277,14 +274,14 @@ export default function Dashboard() {
           <div className="max-w-3xl">
             <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-blue-300/20 bg-blue-500/10 px-4 py-2 text-[12.6px] font-bold uppercase tracking-[0.18em] text-blue-200">
               <span className="h-2 w-2 rounded-full bg-cyan-300 shadow-[0_0_18px_rgba(103,232,249,0.9)]" />
-              AI-Powered Acknowledgement Intelligence
+              AI-Powered Receipt Intelligence
             </div>
             <h1 className="text-4xl font-black leading-[1.07] tracking-[-0.04em] text-white sm:text-5xl @5xl:text-[56px]">
               Extract. Verify.
-              <span className="block">Acknowledgements in <span className="text-blue-400 drop-shadow-[0_0_28px_rgba(59,130,246,0.55)]">seconds.</span></span>
+              <span className="block">Receipts in <span className="text-blue-400 drop-shadow-[0_0_28px_rgba(59,130,246,0.55)]">seconds.</span></span>
             </h1>
             <p className="mt-5 max-w-2xl text-base leading-7 text-slate-400">
-              Upload Tax Invoice or Delivery Challan acknowledgements and let AI extract the document number and date instantly .
+              Upload bus luggage or parcel receipts and let AI extract the receipt number, date, parties and amounts instantly.
             </p>
             <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <Link
@@ -314,12 +311,10 @@ export default function Dashboard() {
         ) : (
           <>
             <section className="mt-5 grid gap-4 sm:grid-cols-2 @5xl:grid-cols-3">
-              <StatCard icon="TD" label="Total Documents" value={stats.total} helper="Acknowledgements in workspace" color="blue" />
+              <StatCard icon="TD" label="Total Documents" value={stats.total} helper="Receipts in workspace" color="blue" />
               <StatCard icon="OK" label="Processed" value={stats.processed} helper="Ready for review" color="green" />
               <StatCard icon="ER" label="Failed" value={stats.failed} helper="Needs reprocess or review" color="red" />
               <StatCard icon="24" label="Processed Today" value={stats.processedToday} helper="Completed in today's run" color="violet" />
-              <StatCard icon="TI" label="Tax Invoice" value={stats.taxInvoice} helper="Documents of this type" color="amber" />
-              <StatCard icon="DC" label="Delivery Challan" value={stats.deliveryChallan} helper="Documents of this type" color="cyan" />
             </section>
 
             <section className="mt-6 grid gap-6 @5xl:grid-cols-[1.12fr_0.88fr]">
@@ -327,7 +322,7 @@ export default function Dashboard() {
                 <div className="mb-5 flex items-center justify-between gap-3">
                   <div>
                     <h2 className="text-xl font-black tracking-tight text-white">Recent Documents</h2>
-                    <p className="mt-1 text-[14.7px] text-slate-500">Latest acknowledgements processed by Transport OCR</p>
+                    <p className="mt-1 text-[14.7px] text-slate-500">Latest receipts processed by Transport OCR</p>
                   </div>
                   <Link to="/documents" className="shrink-0 rounded-full border border-blue-300/20 bg-blue-500/10 px-4 py-2 text-[12.6px] font-black uppercase tracking-[0.14em] text-blue-200 no-underline transition-colors hover:bg-blue-500/15">
                     View all
@@ -373,7 +368,7 @@ export default function Dashboard() {
               <span className="grid h-12 w-12 place-items-center rounded-2xl border border-blue-300/15 bg-blue-500/10 text-[12.6px] font-black text-blue-200">DOC</span>
               <div>
                 <h2 className="text-lg font-black text-white">Supported Document Types</h2>
-                <p className="mt-1 text-[14.7px] text-slate-500">Focused intake for acknowledgement processing.</p>
+                <p className="mt-1 text-[14.7px] text-slate-500">Focused intake for transport receipt processing.</p>
               </div>
             </div>
             <div className="flex flex-wrap gap-2">

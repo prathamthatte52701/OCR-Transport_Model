@@ -20,27 +20,12 @@ import { formatIST } from '../utils/formatDate'
 import { confirmAction } from '../store/dialogStore'
 import BackButton from '../components/BackButton'
 import { numberNotRead } from '../utils/documentDisplay'
+import { receiptFieldsFor } from '../utils/receiptFields'
 
 function formatSize(bytes) {
   if (!bytes) return '-'
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
-}
-
-// Which fields are editable, per documentType - matches backend
-// EDITABLE_FIELDS and PATCH /:id/correct's field-conditional validation.
-function fieldsFor(doc) {
-  if (doc.documentType === 'Tax Invoice') {
-    return [
-      { key: 'taxInvoiceNo', label: 'TAX INVOICE No.', value: doc.taxInvoiceNo, needsReview: doc.taxInvoiceNoNeedsReview },
-      { key: 'referenceNo', label: 'Reference No.', value: doc.referenceNo, needsReview: doc.referenceNoNeedsReview },
-      { key: 'date', label: 'Date', value: doc.date, needsReview: doc.dateNeedsReview, reviewText: 'Please check this date' },
-    ]
-  }
-  return [
-    { key: 'number', label: 'Delivery Challan No.', value: doc.number, needsReview: doc.numberNeedsReview },
-    { key: 'date', label: 'Date', value: doc.date, needsReview: doc.dateNeedsReview, reviewText: 'Please check this date' },
-  ]
 }
 
 export default function DocumentDetailPage() {
@@ -192,9 +177,8 @@ export default function DocumentDetailPage() {
         </span>
       </div>
 
-      <div className="mb-5 grid grid-cols-2 gap-3 rounded-xl border border-gray-800 bg-gray-900 p-4 text-[14.7px] sm:grid-cols-4">
+      <div className="mb-5 grid grid-cols-2 gap-3 rounded-xl border border-gray-800 bg-gray-900 p-4 text-[14.7px] sm:grid-cols-3">
         {[
-          { label: 'Document Type', value: doc.documentType || '-' },
           { label: 'File Size', value: formatSize(doc.size) },
           { label: 'Uploaded', value: formatIST(doc.createdAt) },
           { label: 'Processed', value: formatIST(doc.processedAt || doc.reprocessedAt) },
@@ -255,14 +239,14 @@ export default function DocumentDetailPage() {
         <div className="space-y-3">
           <h3 className="mb-2 font-semibold text-gray-300">Extracted Fields</h3>
           {numberNotRead(doc) && <p className="text-[12.6px] text-amber-400">Number not read</p>}
-          {fieldsFor(doc).map((f) => {
+          {receiptFieldsFor(doc).map((f) => {
             return (
               <div key={f.key} className={`flex items-center justify-between gap-3 rounded-xl border bg-gray-900 px-4 py-3 border-gray-800`}>
                 <div className="flex min-w-0 items-center gap-2">
                   <div className="min-w-0">
                     <p className="text-[12.6px] text-gray-500">{f.label}</p>
                     <p className="truncate text-[14.7px] font-semibold text-gray-100">{f.value || 'Not available'}</p>
-                    {f.needsReview && <p className="text-[12.6px] text-amber-400">{f.reviewText || 'Looks incomplete - please check against the original'}</p>}
+                    {f.needsReview && <p className="text-[12.6px] text-amber-400">{'Looks incomplete - please check against the original'}</p>}
                   </div>
                 </div>
                 <button

@@ -10,29 +10,32 @@ const TOPICS = [
   {
     q: 'I uploaded a file and got an error like "File content does not match" or "File size must be 5 MB or less"',
     a: [
-      'This app only accepts PDF, JPG, JPEG, or PNG files, and each file must be smaller than 5 MB.',
+      'This app only accepts PDF, JPG, JPEG, or PNG files, and each file must be smaller than 5 MB. PDFs must be a single page, and Bulk Upload takes at most 5 files at a time.',
       'Check what type your file is and how big it is (right-click the file → Properties on Windows, or Get Info on Mac).',
       'If it is a different file type (like Word or Excel), save/export it as a PDF first, then upload the PDF.',
       'If it is too big, ask whoever scanned it to save it at a lower quality, or take a normal photo instead of a very high-resolution scan.',
     ],
   },
   {
-    q: 'I forgot to check which "Document Type" was selected before uploading',
+    q: 'What do the warnings on a document mean?',
     a: [
-      'Before every upload, look at the "Document Type" buttons (Tax Invoice / Delivery Challan) above the upload box.',
-      'The app always has one selected by default - if you upload without checking, it may pick the wrong one for your document.',
-      'If you notice after uploading that the wrong type was used, open the document and click "Reprocess" - but first you need to fix this from the very start, so it is best to just double check the Document Type before every upload.',
-      'For Bulk Upload, each file has its own dropdown next to it - check every file\'s dropdown before clicking "Upload All".',
+      'Receipt number missing: the receipt number could not be read. Check the original and click "Edit" to type it in.',
+      'Date missing or odd: the date could not be read, or it does not look like a real date (it should be DD/MM/YYYY).',
+      'Total amount missing: the total could not be read, or it does not match freight + delivery charge + demurrage + taxes.',
+      'GSTIN format wrong: a GSTIN must be 15 characters (for example 29ABCDE1234F1Z5). Check the digits and letters against the original.',
+      'Amount in words does not match: the amount written in words is different from the total amount.',
+      'Phone or receipt number looks odd: phone numbers should have 10 digits, and receipt numbers are usually short codes or digits.',
+      'Possible duplicate: another document with the same receipt number, date and operator already exists. Check you did not upload the same receipt twice.',
     ],
   },
   {
-    q: 'The extracted Number or Date is wrong, or empty (looks like a dash "-")',
+    q: 'A receipt field (number, date, amount, name...) is wrong, or empty (looks like a dash "-")',
     a: [
       'This happens when the scan or photo was blurry, dark, or the number was partly covered by a stamp.',
       'Open the document and compare each extracted value with the original file (you can view/download it from the same page).',
       'Click "Edit" on that field and type in the correct value by looking at the original document (you can view/download the original file from the same page).',
       'If many fields look wrong, try "Reprocess" first - it re-reads the file from scratch and sometimes gets a better result.',
-      'For best results next time: use good lighting, hold the camera steady, and make sure the top of the page (where the number and date are) is not covered by anything.',
+      'For best results next time: use good lighting, hold the camera steady, and make sure the top of the page (where the receipt number and date are) is not covered by anything.',
     ],
   },
   {

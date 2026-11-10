@@ -20,27 +20,9 @@ import {
   pollOutcome,
 } from '../utils/uploadPolling'
 import BackButton from '../components/BackButton'
+import { pickReceipt, receiptFieldsFor } from '../utils/receiptFields'
 
-// Per-documentType editable field list for the bulk review view - mirrors
-// DocumentDetailPage's fieldsFor(), but reads from a bulk result item
-// (f.taxInvoiceNo/f.number/etc, populated by the poll loop) instead of a
-// full document object.
-function reviewFieldsFor(f) {
-  if (f.documentType === 'Tax Invoice') {
-    return [
-      { key: 'taxInvoiceNo', label: 'TAX INVOICE No.', value: f.taxInvoiceNo, needsReview: f.taxInvoiceNoNeedsReview },
-      { key: 'referenceNo', label: 'Reference No.', value: f.referenceNo, needsReview: f.referenceNoNeedsReview },
-      { key: 'date', label: 'Date', value: f.date, needsReview: f.dateNeedsReview, reviewText: 'Please check this date' },
-    ]
-  }
-  return [
-    { key: 'number', label: 'Delivery Challan No.', value: f.number, needsReview: f.numberNeedsReview },
-    { key: 'date', label: 'Date', value: f.date, needsReview: f.dateNeedsReview, reviewText: 'Please check this date' },
-  ]
-}
-
-const DOCUMENT_TYPES = ['Tax Invoice', 'Delivery Challan']
-const MAX_BULK_FILES = 10
+const MAX_BULK_FILES = 5
 // Polling waits are wall-clock limits (see utils/uploadPolling.js): only the SERVER can mark a file
 // 'failed'. When our own wait runs out the row becomes 'slow' (still processing), never 'failed'.
 function LogisticsUploadIllustration() {
@@ -67,8 +49,8 @@ function GuidelineCard() {
         <div className="space-y-2 text-[14.7px] leading-6 text-slate-400">
           <p>- Accepted formats: JPG, JPEG, PNG, PDF</p>
           <p>- Maximum file size: 5 MB</p>
-          <p>- Pick the document type first - it decides which field(s) get extracted</p>
-          <p>- Only the Number and Date from the top header are extracted; items, GST, stamps, and signatures are ignored</p>
+          <p>- PDFs must be a single page; bulk upload takes up to 5 files</p>
+          <p>- Receipt number, date, parties, package count and amounts are extracted</p>
           <p>- Processing may take a few seconds</p>
         </div>
       </div>
@@ -124,7 +106,6 @@ function StatusChip({ status }) {
 
 export default function UploadPage() {
   const [file, setFile] = useState(null)
-  const [documentType, setDocumentType] = useState(DOCUMENT_TYPES[0])
   const [status, setStatus] = useState('idle') // idle | uploading | processing | slow | done | error
   const [error, setError] = useState('')
   const pollRef = useRef(null) // pending setTimeout of the single-upload poll loop
@@ -137,11 +118,8 @@ export default function UploadPage() {
   // Bulk upload - a separate, additive flow alongside the single-file one
   // above. Nothing in this block changes single-file state/handlers.
   const [mode, setMode] = useState('single') // 'single' | 'bulk'
-  const [bulkFiles, setBulkFiles] = useState([]) // [{ file, documentType, status, error, docId }]
+  const [bulkFiles, setBulkFiles] = useState([]) // [{ file, status, error, docId }]
   const [bulkError, setBulkError] = useState('')
-  // Type given to files added from now on: the last "Set all as" choice (default Tax Invoice).
-  // Kept across "Start New Batch" on purpose.
-  const [bulkDefaultType, setBulkDefaultType] = useState(DOCUMENT_TYPES[0])
   const [bulkSubmitting, setBulkSubmitting] = useState(false)
   const [reviewIndex, setReviewIndex] = useState(0)
   const [reviewEditingField, setReviewEditingField] = useState(null) // { docId, key, label, value }
@@ -171,7 +149,7 @@ export default function UploadPage() {
     setError('')
 
     try {
-      const doc = await uploadDocument(file, documentType)
+      const doc = await uploadDocument(file)
       if (!mountedRef.current) return // left the page while uploading: do not start a poll loop
       const docId = doc?._id
       if (!docId) throw new Error('Upload failed: no document ID returned.')
@@ -266,7 +244,7 @@ export default function UploadPage() {
         setBulkError(`${f.name}: ${err}`)
         return
       }
-      additions.push({ file: f, documentType: bulkDefaultType, status: 'waiting', error: '', docId: null })
+      additions.push({ file: f, status: 'waiting', error: '', docId: null })
     }
     setBulkError('')
     setBulkFiles((prev) => [...prev, ...additions])
@@ -275,23 +253,6 @@ export default function UploadPage() {
   function removeBulkFile(index) {
     setBulkFiles((prev) => prev.filter((_, i) => i !== index))
   }
-
-  function setBulkFileType(index, type) {
-    setBulkFiles((prev) => prev.map((f, i) => (i === index ? { ...f, documentType: type } : f)))
-  }
-
-  // "Set all as": one click labels every file in the list. Only touches local state - it
-  // never submits and the upload request format is unchanged.
-  function setAllBulkTypes(type) {
-    setBulkDefaultType(type)
-    setBulkFiles((prev) => prev.map((f) => ({ ...f, documentType: type })))
-  }
-
-  // Which highlight to show: the shared type when every row agrees, otherwise 'mixed'.
-  const bulkTypeState =
-    bulkFiles.length > 0 && bulkFiles.every((f) => f.documentType === bulkFiles[0].documentType)
-      ? bulkFiles[0].documentType
-      : 'mixed'
 
   function stopBulkPolling() {
     bulkRunRef.current += 1
@@ -326,18 +287,7 @@ export default function UploadPage() {
           const polled = await getDocument(f.docId)
           const outcome = pollOutcome(polled)
           if (outcome === 'done') {
-            return {
-              docId: f.docId,
-              status: 'done',
-              taxInvoiceNo: polled.taxInvoiceNo,
-              referenceNo: polled.referenceNo,
-              number: polled.number,
-              date: polled.date,
-              numberNeedsReview: polled.numberNeedsReview,
-              dateNeedsReview: polled.dateNeedsReview,
-              taxInvoiceNoNeedsReview: polled.taxInvoiceNoNeedsReview,
-              referenceNoNeedsReview: polled.referenceNoNeedsReview,
-            }
+            return { docId: f.docId, status: 'done', ...pickReceipt(polled) }
           }
           if (outcome === 'failed') return { docId: f.docId, status: 'failed', error: polled.processingError || 'Processing failed.' }
           return null
@@ -361,14 +311,7 @@ export default function UploadPage() {
               ...f,
               status: u.status,
               error: u.error || '',
-              taxInvoiceNo: u.taxInvoiceNo,
-              referenceNo: u.referenceNo,
-              number: u.number,
-              date: u.date,
-              numberNeedsReview: u.numberNeedsReview,
-              dateNeedsReview: u.dateNeedsReview,
-              taxInvoiceNoNeedsReview: u.taxInvoiceNoNeedsReview,
-              referenceNoNeedsReview: u.referenceNoNeedsReview,
+              ...pickReceipt(u),
             }
           }
           if (timedOut && f.status === 'processing' && f.docId) return { ...f, status: 'slow', error: '' }
@@ -393,10 +336,7 @@ export default function UploadPage() {
     setBulkFiles((prev) => prev.map((f) => ({ ...f, status: 'processing' })))
 
     try {
-      const results = await bulkUploadDocuments(
-        bulkFiles.map((f) => f.file),
-        bulkFiles.map((f) => f.documentType)
-      )
+      const results = await bulkUploadDocuments(bulkFiles.map((f) => f.file))
       if (!mountedRef.current) return // left the page while uploading: do not start a poll loop
 
       setBulkFiles((prev) => prev.map((f, i) => {
@@ -449,14 +389,7 @@ export default function UploadPage() {
       setBulkFiles((prev) => prev.map((f) => (f.docId === docId
         ? {
             ...f,
-            taxInvoiceNo: updated.taxInvoiceNo,
-            referenceNo: updated.referenceNo,
-            number: updated.number,
-            date: updated.date,
-            numberNeedsReview: updated.numberNeedsReview,
-            dateNeedsReview: updated.dateNeedsReview,
-            taxInvoiceNoNeedsReview: updated.taxInvoiceNoNeedsReview,
-            referenceNoNeedsReview: updated.referenceNoNeedsReview,
+            ...pickReceipt(updated),
           }
         : f)))
       setReviewEditingField(null)
@@ -553,19 +486,18 @@ export default function UploadPage() {
                   <div className="min-w-0 space-y-4">
                     <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
                       <span className="min-w-0 truncate text-[13.6px] font-semibold text-slate-300" title={reviewItem.file.name}>{reviewItem.file.name}</span>
-                      <span className="shrink-0 text-[12.6px] text-slate-500">{reviewItem.documentType}</span>
                     </div>
 
                     {reviewItem.status === 'done' ? (
                       <div className="space-y-2">
-                        {reviewFieldsFor(reviewItem).map((f) => {
+                        {receiptFieldsFor(reviewItem).map((f) => {
                           return (
                             <div key={f.key} className={`flex items-center justify-between gap-3 rounded-xl border bg-white/[0.03] px-4 py-3 border-white/10`}>
                               <div className="flex min-w-0 items-center gap-2">
                                 <div className="min-w-0">
                                   <p className="text-[12.6px] text-slate-500">{f.label}</p>
                                   <p className="truncate text-[14.7px] font-semibold text-slate-200">{f.value || 'Not available'}</p>
-                                  {f.needsReview && <p className="text-[12.6px] text-amber-400">{f.reviewText || 'Looks incomplete - please check against the original'}</p>}
+                                  {f.needsReview && <p className="text-[12.6px] text-amber-400">{'Looks incomplete - please check against the original'}</p>}
                                 </div>
                               </div>
                               <button
@@ -652,7 +584,7 @@ export default function UploadPage() {
                 {bulkFiles.map((f, i) => (
                   <div key={i} className="flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
                     <span className="min-w-0 truncate text-[13.6px] text-slate-300">
-                      {f.file.name} <span className="text-slate-600">- {f.documentType}</span>
+                      {f.file.name}
                     </span>
                     <StatusChip status={f.status} />
                   </div>
@@ -674,43 +606,10 @@ export default function UploadPage() {
                 </label>
 
                 {bulkFiles.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Set all as">
-                    <span className="text-[12.6px] font-bold uppercase tracking-wide text-slate-500">Set all as</span>
-                    {DOCUMENT_TYPES.map((t) => (
-                      <button
-                        key={t}
-                        type="button"
-                        aria-pressed={bulkTypeState === t}
-                        onClick={() => setAllBulkTypes(t)}
-                        className={`rounded-full border px-3.5 py-1.5 text-[12.6px] font-bold transition-colors ${
-                          bulkTypeState === t
-                            ? 'border-blue-300/60 bg-blue-500/20 text-blue-100'
-                            : 'border-white/10 bg-white/[0.035] text-slate-300 hover:border-blue-300/30 hover:bg-blue-500/10'
-                        }`}
-                      >
-                        {t}
-                      </button>
-                    ))}
-                    {bulkTypeState === 'mixed' && (
-                      <span className="rounded-full bg-amber-400/15 px-2.5 py-1 text-[11.6px] font-bold text-amber-200">Mixed</span>
-                    )}
-                  </div>
-                )}
-
-                {bulkFiles.length > 0 && (
                   <div className="space-y-2">
                     {bulkFiles.map((f, i) => (
                       <div key={i} className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3">
                         <span className="min-w-0 flex-1 truncate text-[13.6px] text-slate-300">{f.file.name}</span>
-                        <select
-                          value={f.documentType}
-                          onChange={(e) => setBulkFileType(i, e.target.value)}
-                          className="rounded-lg border border-white/10 bg-slate-900 px-2 py-1.5 text-[12.6px] font-semibold text-slate-200 focus:outline-none focus:border-blue-300/40"
-                        >
-                          {DOCUMENT_TYPES.map((t) => (
-                            <option key={t} value={t}>{t}</option>
-                          ))}
-                        </select>
                         <button
                           onClick={() => removeBulkFile(i)}
                           className="shrink-0 text-[12.6px] font-bold text-rose-300 hover:text-rose-200"
@@ -766,27 +665,6 @@ export default function UploadPage() {
             </div>
           ) : (
             <div className="space-y-5">
-              <div>
-                <p className="mb-2 text-sm font-bold text-blue-300">Document Type</p>
-                <div className="grid grid-cols-2 gap-3">
-                  {DOCUMENT_TYPES.map((type) => (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => setDocumentType(type)}
-                      disabled={isProcessing}
-                      className={`rounded-2xl border px-4 py-3 text-[14.7px] font-bold transition-all ${
-                        documentType === type
-                          ? 'border-blue-300/60 bg-blue-500/15 text-blue-100 shadow-[0_0_28px_rgba(37,99,235,0.24)]'
-                          : 'border-white/10 bg-white/[0.03] text-slate-400 hover:border-blue-300/30 hover:text-slate-200'
-                      }`}
-                    >
-                      {type}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
               <UploadCard onFileSelect={setFile} disabled={isProcessing} />
 
               {file && !isProcessing && <LazyDocumentViewer file={file} heightClass="h-[420px]" />}
