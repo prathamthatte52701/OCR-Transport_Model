@@ -1,7 +1,5 @@
 import { Link, useNavigate } from 'react-router-dom'
 import { useState } from 'react'
-import { toast } from 'sonner'
-import { downloadWorkbook } from '../api/excel'
 import { useDocumentsSummary, useTrainingStats } from '../hooks/useDocumentsQueries'
 import LoadingState from '../components/LoadingState'
 import PageBackground from '../components/PageBackground'
@@ -13,7 +11,6 @@ const features = [
   { icon: 'OC', title: 'Header OCR', desc: 'Crops to the top header section of the page and extracts text from just that region for maximum accuracy.' },
   { icon: 'AI', title: 'AI Analysis', desc: 'Identify the document number and date automatically - Tax Invoice or Delivery Challan.' },
   { icon: 'ED', title: 'Edit', desc: 'Review and correct extracted number/date instantly.' },
-  { icon: 'XL', title: 'Excel Export', desc: 'Export verified rows into a running Excel workbook with one click.' },
 ]
 
 const supportedTypes = ['Tax Invoice', 'Delivery Challan']
@@ -256,7 +253,6 @@ function DocumentSearchBar() {
 }
 
 export default function Dashboard() {
-  const [exporting, setExporting] = useState(false)
   const { data, isLoading: docsLoading } = useDocumentsSummary()
   const { data: training = { trainedCount: 0, correctedCount: 0 }, isLoading: trainingLoading } = useTrainingStats()
   const loading = docsLoading || trainingLoading
@@ -272,17 +268,6 @@ export default function Dashboard() {
   }
   const recentDocs = data?.recent || []
 
-  async function handleExport() {
-    setExporting(true)
-    try {
-      await downloadWorkbook()
-    } catch (err) {
-      toast.error(err.userMessage || 'Could not download the Excel workbook. Please try again.')
-    } finally {
-      setExporting(false)
-    }
-  }
-
   return (
     <div className="relative min-h-full overflow-hidden bg-[#020817]">
       <PageBackground variant="grid" />
@@ -295,11 +280,11 @@ export default function Dashboard() {
               AI-Powered Acknowledgement Intelligence
             </div>
             <h1 className="text-4xl font-black leading-[1.07] tracking-[-0.04em] text-white sm:text-5xl @5xl:text-[56px]">
-              Extract. Verify. Export.
+              Extract. Verify.
               <span className="block">Acknowledgements in <span className="text-blue-400 drop-shadow-[0_0_28px_rgba(59,130,246,0.55)]">seconds.</span></span>
             </h1>
             <p className="mt-5 max-w-2xl text-base leading-7 text-slate-400">
-              Upload Tax Invoice or Delivery Challan acknowledgements and let AI extract the document number and date instantly - then export everything to Excel.
+              Upload Tax Invoice or Delivery Challan acknowledgements and let AI extract the document number and date instantly .
             </p>
             <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
               <Link
@@ -308,18 +293,6 @@ export default function Dashboard() {
               >
                 Upload Document
               </Link>
-              <button
-                onClick={handleExport}
-                disabled={exporting}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-emerald-600 to-emerald-500 px-6 py-3.5 text-[14.7px] font-black text-white shadow-[0_18px_45px_rgba(16,185,129,0.34)] transition-all hover:-translate-y-0.5 hover:shadow-[0_22px_60px_rgba(16,185,129,0.45)] disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-emerald-300/60"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
-                  <path d="M12 4v12" />
-                  <path d="M7 11l5 5 5-5" />
-                  <path d="M4 20h16" />
-                </svg>
-                {exporting ? 'Exporting...' : 'Export Excel'}
-              </button>
               <Link
                 to="/documents"
                 className="inline-flex items-center justify-center rounded-2xl border border-white/10 bg-white/[0.045] px-6 py-3.5 text-[14.7px] font-black text-slate-200 no-underline transition-all hover:-translate-y-0.5 hover:border-blue-300/30 hover:bg-blue-500/10 focus:outline-none focus:ring-2 focus:ring-blue-300/40"

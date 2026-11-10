@@ -37,12 +37,6 @@ async def _ensure_indexes(db: AsyncIOMotorDatabase) -> None:
     safe to call on every startup."""
     await db.documents.create_index([("userId", 1), ("isDeleted", 1), ("createdAt", -1)])
     await db.documents.create_index([("userId", 1), ("documentType", 1)])
-    await db.workbooks.create_index([("userId", 1), ("year", -1)])
-    await db.exportedrows.create_index([("userId", 1), ("exportedAt", -1)])
-    # Save-Again and purge look rows up by documentId (userId is only a secondary filter).
-    await db.exportedrows.create_index([("documentId", 1), ("userId", 1)])
-    # Duplicate-warning lookup on Save: all of one user's exported rows for the batch's dates.
-    await db.exportedrows.create_index([("userId", 1), ("date", 1)])
     await db.settings.create_index([("userId", 1), ("key", 1)], unique=True)
     await db.corrections.create_index([("documentId", 1)])
     await db.auditlogs.create_index([("userId", 1), ("createdAt", -1)])

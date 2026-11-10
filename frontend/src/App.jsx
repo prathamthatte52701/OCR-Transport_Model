@@ -20,7 +20,6 @@ import UploadPage from './pages/UploadPage'
 import DocumentsPage from './pages/DocumentsPage'
 import DocumentsViewAllPage from './pages/DocumentsViewAllPage'
 import DocumentDetailPage from './pages/DocumentDetailPage'
-import ExportHistoryPage from './pages/ExportHistoryPage'
 import MyActivityPage from './pages/MyActivityPage'
 import ProfilePage from './pages/ProfilePage'
 import HelpPage from './pages/HelpPage'
@@ -57,7 +56,6 @@ export default function App() {
                 <Route path="/documents" element={<DocumentsPage />} />
                 <Route path="/documents/view-all" element={<DocumentsViewAllPage />} />
                 <Route path="/documents/:id" element={<DocumentDetailPage />} />
-                <Route path="/export-history" element={<ExportHistoryPage />} />
                 <Route path="/my-activity" element={<MyActivityPage />} />
                 <Route path="/profile" element={<ProfilePage />} />
                 <Route path="/help" element={<HelpPage />} />

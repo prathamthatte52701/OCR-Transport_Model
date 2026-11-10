@@ -1,11 +1,10 @@
 import { NavLink } from 'react-router-dom'
-import { Activity, CircleHelp, FileSpreadsheet, FileText, LayoutDashboard, Upload, X } from 'lucide-react'
+import { Activity, CircleHelp, FileText, LayoutDashboard, Upload, X } from 'lucide-react'
 
 const navLinks = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard, exact: true },
   { to: '/upload', label: 'Upload', icon: Upload },
   { to: '/documents', label: 'My Documents', icon: FileText },
-  { to: '/export-history', label: 'Export History', icon: FileSpreadsheet },
   { to: '/my-activity', label: 'My Activity', icon: Activity },
   { to: '/help', label: 'Help', icon: CircleHelp },
 ]

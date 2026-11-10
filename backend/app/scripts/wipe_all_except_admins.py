@@ -19,7 +19,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo.errors import PyMongoError
 
 from app.core.config import settings
-from app.features.excel import service as excel_service
+EXPORT_DIR = Path(__file__).resolve().parents[2] / "exports"  # leftover; scripts go in a later step
 
 DATA_COLLECTIONS = (
     "documents",
@@ -132,7 +132,7 @@ async def run(argv: list[str], *, exports_dir: Path | None = None) -> int:
     parser.add_argument("--i-have-a-backup", action="store_true", dest="backup")
     parser.add_argument("--exports-dir", type=Path, default=None)
     args = parser.parse_args(argv)
-    exports_dir = exports_dir or args.exports_dir or excel_service.EXPORT_DIR
+    exports_dir = exports_dir or args.exports_dir or EXPORT_DIR
 
     if args.db != settings.mongo_db_name:
         print(

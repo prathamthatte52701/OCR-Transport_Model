@@ -9,7 +9,6 @@ import {
   useCorrectDocument,
   useReprocessDocument,
   useDeleteDocument,
-  useSaveDocumentMutation,
   usePurgeDocumentFile,
 } from '../hooks/useDocumentMutations'
 import CorrectionModal from '../components/CorrectionModal'
@@ -55,7 +54,6 @@ export default function DocumentDetailPage() {
   const correctMutation = useCorrectDocument(id)
   const reprocessMutation = useReprocessDocument(id)
   const deleteMutation = useDeleteDocument(id)
-  const saveMutation = useSaveDocumentMutation()
   const purgeMutation = usePurgeDocumentFile(id)
 
   // Original file for the in-page viewer. Short gcTime so big blobs do not linger; not stored anywhere else.
@@ -127,23 +125,6 @@ export default function DocumentDetailPage() {
       }
     } catch (err) {
       toast.error(err.userMessage || 'Could not remove the original file. Please try again.')
-    }
-  }
-
-  async function handleSave() {
-    if (doc.exported) {
-      const ok = await confirmAction({
-        title: 'Save again?',
-        message: 'This document is already in Excel. Saving again will replace the old row.',
-        confirmLabel: 'Yes, Save Again',
-      })
-      if (!ok) return
-    }
-    try {
-      const message = await saveMutation.mutateAsync(id)
-      if (message) toast.success(message)
-    } catch (err) {
-      toast.error(err.userMessage || 'Could not save this document to Excel. Please try again.')
     }
   }
 
@@ -250,11 +231,6 @@ export default function DocumentDetailPage() {
       <div className={doc.filePurged ? '' : 'grid gap-6 @5xl:grid-cols-2 @5xl:items-start'}>
       <div className="min-w-0">
       <div className="mb-6 flex flex-wrap gap-2">
-        {doc.uploadStatus === 'processed' && (
-          <button onClick={handleSave} disabled={saveMutation.isPending} className="rounded-lg bg-emerald-700 px-4 py-2 text-[14.7px] font-medium text-white transition-colors hover:bg-emerald-600 disabled:opacity-50">
-            {saveMutation.isPending ? 'Saving...' : doc.exported ? 'Save Again' : 'Save to Excel'}
-          </button>
-        )}
         {!doc.filePurged && (
           <>
             <button onClick={handleDownload} className="rounded-lg bg-gray-800 px-4 py-2 text-[14.7px] text-gray-300 transition-colors hover:bg-gray-700">

@@ -6,8 +6,8 @@ Checklist of every feature. Tick after commit. Re-read this + spec at start of e
 - [x] 1.1 Pre-checks (refs exist, 20 images, spec dir, remote empty) — no commit needed
 - [x] 1.2 Robocopy ACKN base into repo — d612416
 - [x] 1.3 Rename identity (DB docintel_transport, ports 2000/3000/4000, grep leftovers) — d612416
-- [ ] 1.4 Env setup (.gitignore, .env.example, .env, venv, npm install, first push)
-- [ ] 1.5 Remove Excel feature completely
+- [x] 1.4 Env setup (.gitignore, .env.example, .env, venv, npm install, first push) — d612416, 629b1d1
+- [x] 1.5 Remove Excel feature completely — pending commit. Known fallout for 1.10: backend test_admin_audit.py, test_ui_aggregates.py, documents/test_isolation.py, ocr/test_date_needs_review.py, core/test_indexes.py reference deleted excel code; scripts/find_duplicate_workbooks.py + its test still import deleted excel_service (dropped in 1.8 anyway); `exported` field left on documents schema/correction (harmless, Excel-era leftover, consider stripping later)
 - [ ] 1.6 Remove approval flow + Google sign-in
 - [ ] 1.7 Remove Save step
 - [ ] 1.8 Scripts: keep/drop per spec section 12
@@ -41,3 +41,4 @@ Checklist of every feature. Tick after commit. Re-read this + spec at start of e
 ## Commit log
 (hash — message — one-line result, appended as features land)
 - d612416 — bootstrap Transport OCR Model from ACKN base — copy + identity rename (DB/ports/titles/keys), .gitignore fixed
+- 629b1d1 — fix origin defaults to 3000/4000 — backend/.env written with real secrets, venv+npm installs verified, backend boots on :2000 (Mongo connected, 7 Groq keys loaded), frontend+admin build clean, pushed to origin/master (branch stayed master, not main — remote delete of master is destructive, flagged to owner)

@@ -6,7 +6,6 @@ from typing import Any, Literal
 
 from bson import ObjectId
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.errors import DuplicateKeyError
 
@@ -43,7 +42,6 @@ from app.features.documents.correction_rules import (
 )
 from app.features.documents.gridfs_service import delete_file
 from app.features.documents.schemas import CorrectRequest
-from app.features.excel import service as excel_service
 from app.features.ocr.pipeline import ocr_engine_status, ocr_lock_status
 
 router = APIRouter()
@@ -65,10 +63,6 @@ FIELDS_BY_DOCUMENT_TYPE = {
     "Tax Invoice": {"taxInvoiceNo", "referenceNo", "date"},
     "Delivery Challan": {"number", "date"},
 }
-
-
-def _physical_workbook_filename(user_id: ObjectId, filename: str) -> str:
-    return excel_service.physical_workbook_filename(user_id, filename)
 
 
 def _pagination(
@@ -419,8 +413,7 @@ async def delete_user(
     user_id: PyObjectId, current_user: CurrentUser = Depends(require_admin)
 ) -> dict:
     """Cascade delete: every document (+ its GridFS file, corrections), every
-    workbook (+ its .xlsx file on disk), every exported-row record, and the
-    excel-state settings row - a clean removal rather than an orphaned trail,
+    settings row - a clean removal rather than an orphaned trail,
     ported 1:1 from the old admin.js DELETE /users/:id."""
     if user_id == current_user.id:
         raise HTTPException(status_code=400, detail="You cannot delete your own account.")
@@ -448,18 +441,7 @@ async def delete_user(
 
     await db.corrections.delete_many({"documentId": {"$in": doc_ids}})
     await db.documents.delete_many({"userId": user_id})
-    await db.exportedrows.delete_many({"userId": user_id})
 
-    workbooks_cursor = db.workbooks.find({"userId": user_id}, {"_id": 1, "filename": 1})
-    workbooks = await workbooks_cursor.to_list(length=None)
-    for wb in workbooks:
-        target = excel_service.file_path(_physical_workbook_filename(user_id, wb["filename"]))
-        if target.exists():
-            try:
-                target.unlink()
-            except OSError:
-                pass
-    await db.workbooks.delete_many({"userId": user_id})
     await db.settings.delete_many({"userId": user_id})
     await db.passwordresetrequests.delete_many({"userId": user_id})
     chat_files = await chat_delete_attachments(db, {"threadUserId": user_id})
@@ -479,7 +461,6 @@ async def delete_user(
             "targetUserId": str(user_id),
             "targetEmail": deleted_email,
             "documentsDeleted": len(doc_ids),
-            "workbooksDeleted": len(workbooks),
             "chatFilesDeleted": chat_files["files"],
             "chatBytesFreed": chat_files["bytes"],
         },
@@ -638,13 +619,11 @@ async def dismiss_password_request(
     return {"ok": True}
 
 
-async def _execute_purge(filter_query: dict) -> tuple[int, int, list[str]]:
+async def _execute_purge(filter_query: dict) -> int:
     """Shared execution tail for every nuke variant below, once the filter is
     built and the confirmation gate has passed: delete each matched
-    document's GridFS file, surgically remove its exported Excel rows (or
-    the whole workbook if that empties it), then hard-delete the document
-    and exportedrows records themselves. Returns
-    (documentsDeleted, rowsRemoved, workbooksFullyDeleted)."""
+    document's GridFS file, then hard-delete the document records.
+    Returns documentsDeleted."""
     db = get_database()
     docs = await db.documents.find(filter_query).to_list(None)
     doc_ids = [d["_id"] for d in docs]
@@ -658,18 +637,11 @@ async def _execute_purge(filter_query: dict) -> tuple[int, int, list[str]]:
                     doc["gridFsFileId"], doc["_id"], doc.get("userId"), "admin_nuke_purge", exc
                 )
 
-    rows_removed = 0
-    workbooks_fully_deleted: list[str] = []
     if doc_ids:
-        exported_rows = await db.exportedrows.find({"documentId": {"$in": doc_ids}}).to_list(None)
-        rows_removed, workbooks_fully_deleted = (
-            await purge_service.remove_exported_rows_from_workbooks(exported_rows)
-        )
         await db.documents.delete_many({"_id": {"$in": doc_ids}})
         await db.corrections.delete_many({"documentId": {"$in": doc_ids}})
-        await db.exportedrows.delete_many({"documentId": {"$in": doc_ids}})
 
-    return len(doc_ids), rows_removed, workbooks_fully_deleted
+    return len(doc_ids)
 
 
 @router.delete("/users/{user_id}/purge-range")
@@ -706,7 +678,7 @@ async def admin_purge_user_range(
         current_user, body, "NUKE USER", "admin_nuke_user_range_blocked"
     )
 
-    documents_deleted, rows_removed, workbooks_fully_deleted = await _execute_purge(filter_query)
+    documents_deleted = await _execute_purge(filter_query)
 
     await log_action(
         current_user.id,
@@ -718,15 +690,11 @@ async def admin_purge_user_range(
             "olderThanMonths": body.older_than_months,
             "dateRangeEnd": range_end,
             "documentsDeleted": documents_deleted,
-            "rowsRemoved": rows_removed,
-            "workbooksFullyDeleted": workbooks_fully_deleted,
         },
     )
     return {
         "message": f"{documents_deleted} document(s) permanently deleted for this user.",
         "documentsDeleted": documents_deleted,
-        "workbooksFullyDeleted": workbooks_fully_deleted,
-        "rowsRemoved": rows_removed,
     }
 
 
@@ -768,7 +736,7 @@ async def admin_purge_user_months(
         current_user, body, "NUKE USER MONTHS", "admin_nuke_user_months_blocked"
     )
 
-    documents_deleted, rows_removed, workbooks_fully_deleted = await _execute_purge(filter_query)
+    documents_deleted = await _execute_purge(filter_query)
 
     await log_action(
         current_user.id,
@@ -780,15 +748,11 @@ async def admin_purge_user_months(
             "year": body.year,
             "months": body.months,
             "documentsDeleted": documents_deleted,
-            "rowsRemoved": rows_removed,
-            "workbooksFullyDeleted": workbooks_fully_deleted,
         },
     )
     return {
         "message": f"{documents_deleted} document(s) permanently deleted for this user.",
         "documentsDeleted": documents_deleted,
-        "workbooksFullyDeleted": workbooks_fully_deleted,
-        "rowsRemoved": rows_removed,
     }
 
 
@@ -814,7 +778,7 @@ async def admin_purge_global_range(
         current_user, body, "NUKE ALL RANGE", "admin_nuke_global_range_blocked"
     )
 
-    documents_deleted, rows_removed, workbooks_fully_deleted = await _execute_purge(filter_query)
+    documents_deleted = await _execute_purge(filter_query)
 
     await log_action(
         current_user.id,
@@ -825,15 +789,11 @@ async def admin_purge_global_range(
             "olderThanMonths": body.older_than_months,
             "dateRangeEnd": range_end,
             "documentsDeleted": documents_deleted,
-            "rowsRemoved": rows_removed,
-            "workbooksFullyDeleted": workbooks_fully_deleted,
         },
     )
     return {
         "message": f"{documents_deleted} document(s) permanently deleted across all users.",
         "documentsDeleted": documents_deleted,
-        "workbooksFullyDeleted": workbooks_fully_deleted,
-        "rowsRemoved": rows_removed,
     }
 
 
@@ -860,7 +820,7 @@ async def admin_purge_global_months(
         current_user, body, "NUKE ALL MONTHS", "admin_nuke_global_months_blocked"
     )
 
-    documents_deleted, rows_removed, workbooks_fully_deleted = await _execute_purge(filter_query)
+    documents_deleted = await _execute_purge(filter_query)
 
     await log_action(
         current_user.id,
@@ -871,15 +831,11 @@ async def admin_purge_global_months(
             "year": body.year,
             "months": body.months,
             "documentsDeleted": documents_deleted,
-            "rowsRemoved": rows_removed,
-            "workbooksFullyDeleted": workbooks_fully_deleted,
         },
     )
     return {
         "message": f"{documents_deleted} document(s) permanently deleted across all users.",
         "documentsDeleted": documents_deleted,
-        "workbooksFullyDeleted": workbooks_fully_deleted,
-        "rowsRemoved": rows_removed,
     }
 
 
@@ -1139,126 +1095,6 @@ async def dismiss_orphaned_file(
 
 
 # ---------------------------------------------------------------------------
-# Workbooks (cross-user)
-# ---------------------------------------------------------------------------
-
-
-@router.get("/workbooks")
-async def list_workbooks_admin(current_user: CurrentUser = Depends(require_admin)) -> dict:
-    db = get_database()
-    await log_admin_access(current_user.id, None, "workbooks", "list")
-    cursor = db.workbooks.find({}).sort([("year", -1), ("createdAt", -1)])
-    workbooks = await cursor.to_list(length=None)
-    owner_ids = {wb["userId"] for wb in workbooks}
-    owners = {
-        o["_id"]: o
-        async for o in db.users.find({"_id": {"$in": list(owner_ids)}}, {"username": 1, "email": 1})
-    }
-    out = []
-    for wb in workbooks:
-        owner = owners.get(wb["userId"])
-        out.append(
-            {
-                "id": str(wb["_id"]),
-                "userId": str(wb["userId"]),
-                "year": wb["year"],
-                "filename": wb["filename"],
-                "isActive": wb["isActive"],
-                "archivedAt": wb.get("archivedAt"),
-                "owner": (
-                    {
-                        "id": str(owner["_id"]),
-                        "username": owner["username"],
-                        "email": owner["email"],
-                    }
-                    if owner
-                    else None
-                ),
-            }
-        )
-    return {"workbooks": out}
-
-
-@router.get("/workbooks/{workbook_id}/download")
-async def download_workbook_admin(
-    workbook_id: PyObjectId, current_user: CurrentUser = Depends(require_admin)
-) -> FileResponse:
-    db = get_database()
-    wb = await db.workbooks.find_one({"_id": workbook_id})
-    if not wb:
-        raise HTTPException(status_code=404, detail="Workbook not found.")
-
-    target = excel_service.file_path(_physical_workbook_filename(wb["userId"], wb["filename"]))
-    if not target.exists():
-        raise HTTPException(status_code=404, detail="Workbook file not found on the server.")
-    await log_admin_access(current_user.id, wb["userId"], "workbook", "download", workbook_id)
-
-    download_name = wb["filename"] if wb["filename"].endswith(".xlsx") else f"{wb['filename']}.xlsx"
-    return FileResponse(
-        path=target,
-        filename=download_name,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Exports (cross-user)
-# ---------------------------------------------------------------------------
-
-
-@router.get("/exports")
-async def list_exports_admin(
-    user_id: str | None = Query(default=None, alias="userId"),
-    page: int | None = Query(default=None),
-    limit: int | None = Query(default=None),
-    current_user: CurrentUser = Depends(require_admin),
-) -> dict:
-    db = get_database()
-    lim, pg, skip = _pagination(page, limit)
-    filt: dict = {}
-    if user_id:
-        try:
-            filt["userId"] = ObjectId(user_id)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid userId.") from None
-
-    await log_admin_access(current_user.id, filt.get("userId"), "export_rows", "list")
-    total_exports = await db.exportedrows.count_documents(filt)
-    cursor = db.exportedrows.find(filt).sort("exportedAt", -1).skip(skip).limit(lim)
-    rows = await cursor.to_list(length=None)
-    workbook_ids = {r["workbookId"] for r in rows if r.get("workbookId")}
-    workbooks = {
-        w["_id"]: w
-        async for w in db.workbooks.find(
-            {"_id": {"$in": list(workbook_ids)}}, {"filename": 1, "year": 1}
-        )
-    }
-    out = []
-    for r in rows:
-        wb = workbooks.get(r.get("workbookId"))
-        out.append(
-            {
-                "id": str(r["_id"]),
-                "documentId": str(r["documentId"]),
-                "userId": str(r["userId"]),
-                "workbook": {"filename": wb["filename"], "year": wb["year"]} if wb else None,
-                "documentType": r["documentType"],
-                "taxInvoiceNo": r.get("taxInvoiceNo"),
-                "referenceNo": r.get("referenceNo"),
-                "number": r.get("number"),
-                "date": r.get("date"),
-                "exportedAt": r["exportedAt"],
-            }
-        )
-    return {
-        "exports": out,
-        "totalExports": total_exports,
-        "totalPages": max(1, -(-total_exports // lim)),
-        "currentPage": pg,
-    }
-
-
-# ---------------------------------------------------------------------------
 # Audit logs
 # ---------------------------------------------------------------------------
 
@@ -1473,7 +1309,6 @@ async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
         n_tax,
         n_challan,
         total_documents,
-        total_exports,
         activity_24h,
         activity_7d,
         pending_count,
@@ -1483,11 +1318,9 @@ async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
         orphaned,
         users_series,
         docs_series,
-        exports_series,
         processed_window,
         users_trend,
         docs_trend,
-        exports_trend,
         password_requests_open,
     ) = await _gather_untyped(
         db.users.count_documents({}),
@@ -1500,7 +1333,6 @@ async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
             for t in ("Tax Invoice", "Delivery Challan")
         ),
         db.documents.count_documents(live),
-        db.exportedrows.count_documents({}),
         db.auditlogs.count_documents({"createdAt": {"$gte": day_ago}}),
         db.auditlogs.count_documents({"createdAt": {"$gte": week_ago}}),
         db.users.count_documents(_status_query("pending")),
@@ -1511,11 +1343,9 @@ async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
         db.orphanedfiles.count_documents({}),
         _daily_series(db, "users", "createdAt", days),
         _daily_series(db, "documents", "createdAt", days, live),
-        _daily_series(db, "exportedrows", "exportedAt", days),
         window("documents", "processedAt", {**live, "uploadStatus": "processed"}),
         window("users", "createdAt"),
         window("documents", "createdAt", live),
-        window("exportedrows", "exportedAt"),
         db.passwordresetrequests.count_documents({"status": "open"}),
     )
     by_status = {"uploaded": n_uploaded, "processed": n_processed, "failed": n_failed}
@@ -1532,7 +1362,6 @@ async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
             "days": days,
             "users": users_series,
             "documents": docs_series,
-            "exports": exports_series,
         },
         "processedDocuments": {"total": n_processed, **processed_window},
         "recentMaintenance": [
@@ -1546,7 +1375,6 @@ async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
         ],
         "totalUsers": total_users,
         "totalDocuments": total_documents,
-        "totalExports": total_exports,
         "documentsByStatus": by_status,
         "documentsByType": by_type,
         "ocrFailureRate": ocr_failure_rate,
@@ -1555,7 +1383,7 @@ async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
         "passwordRequests": {"count": password_requests_open},
         "orphanedFiles": orphaned,
         "failedDocuments": n_failed,
-        "trends": {"users": users_trend, "documents": docs_trend, "exports": exports_trend},
+        "trends": {"users": users_trend, "documents": docs_trend},
         "activityFeed": _feed_items(events, names),
     }
 
@@ -1563,20 +1391,6 @@ async def telemetry(current_user: CurrentUser = Depends(require_admin)) -> dict:
 # ---------------------------------------------------------------------------
 # System health
 # ---------------------------------------------------------------------------
-
-
-def _workbook_storage() -> dict:
-    """Bytes/count of real *.xlsx workbooks in the exports dir (ignores .lock and .tmp<pid>.xlsx
-    scratch files). A missing or unreadable dir is simply 0/0."""
-    total = count = 0
-    try:
-        for f in excel_service.EXPORT_DIR.iterdir():
-            if f.name.endswith(".xlsx") and not re.search(r"\.tmp\d*\.xlsx$", f.name):
-                total += f.stat().st_size
-                count += 1
-    except OSError:
-        pass
-    return {"bytes": total, "count": count}
 
 
 @router.get("/system")
@@ -1609,6 +1423,6 @@ async def system_status(current_user: CurrentUser = Depends(require_admin)) -> d
         "ocrEngine": ocr_engine_status(),
         "serverStartedAt": _PROCESS_START.isoformat(),
         "uptimeSeconds": int((now - _PROCESS_START).total_seconds()),
-        "storage": {"documentFiles": files, "workbookFiles": _workbook_storage()},
+        "storage": {"documentFiles": files},
         "checkedAt": now.isoformat(),
     }

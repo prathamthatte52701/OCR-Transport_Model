@@ -23,7 +23,6 @@ from app.features.chat.files import PDF_MAX_BYTES, run_expiry_forever
 from app.features.chat.router import router as chat_router
 from app.features.documents.router import MAX_BULK_FILES, MAX_FILE_SIZE, recover_interrupted_uploads
 from app.features.documents.router import router as documents_router
-from app.features.excel.router import router as excel_router
 from app.features.ocr.pipeline import ocr_lock_status
 from app.features.ocr.providers.groq_provider import describe_config
 
@@ -149,7 +148,6 @@ app.add_middleware(
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin_router, prefix="/api/admin", tags=["admin"])
-app.include_router(excel_router, prefix="/api/documents", tags=["excel"])
 app.include_router(documents_router, prefix="/api/documents", tags=["documents"])
 app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
 

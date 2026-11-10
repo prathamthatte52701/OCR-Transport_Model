@@ -20,7 +20,7 @@ from bson import json_util
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from app.core.config import settings
-from app.features.excel import service as excel_service
+EXPORT_DIR = Path(__file__).resolve().parents[2] / "exports"  # leftover; scripts go in a later step
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 
@@ -148,7 +148,7 @@ async def run(
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--keep-exports", action="store_true")
     args = parser.parse_args(argv)
-    exports_dir = exports_dir or excel_service.EXPORT_DIR
+    exports_dir = exports_dir or EXPORT_DIR
     backup_root = backup_root or BACKEND_DIR
 
     if args.db != settings.mongo_db_name:

@@ -1,6 +1,5 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { getDocument, listDocuments, listDocumentsSummary, myActivity, trainingStats } from '../api/documents'
-import { exportHistory } from '../api/excel'
 
 export const documentKeys = {
   list: (params) => ['documents', 'list', params],
@@ -64,15 +63,6 @@ export function useTrainingStats() {
   return useQuery({
     queryKey: documentKeys.trainingStats,
     queryFn: trainingStats,
-  })
-}
-
-export function useExportHistory(params = {}) {
-  return useQuery({
-    // keeps the ['exports', 'history'] prefix so the existing invalidations still hit every page
-    queryKey: ['exports', 'history', params],
-    queryFn: () => exportHistory(params),
-    placeholderData: keepPreviousData,
   })
 }
 

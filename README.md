@@ -6,10 +6,9 @@ It is a Windows desktop-style tool, built for one office PC: private per-user ac
 
 ## At a glance
 
-**Upload** a document → **check** the number and date beside the original → **save** to Excel → find it in your yearly workbook, filed under the right month.
+**Upload** a document → **check** the number and date beside the original.
 
 - Review and edit with the original file always in view
-- Excel files that are written safely, even while you have them open
 - Private accounts with admin approval and a full audit trail
 - Clear flags for anything that looks unusual, so nothing slips through quietly
 - A built-in chat between each user and the admins
@@ -38,7 +37,6 @@ All screenshots use made-up demo accounts and sample documents. No real data is 
 - [Configuration](#configuration)
 - [Using the app](#using-the-app)
 - [Chat](#chat)
-- [Excel export rules](#excel-export-rules)
 - [Data quality safeguards](#data-quality-safeguards)
 - [Admin panel](#admin-panel)
 - [Security](#security)
@@ -56,12 +54,11 @@ All screenshots use made-up demo accounts and sample documents. No real data is 
 | **Photos** | Phone photos are cropped to the page, straightened (small tilts) before reading. |
 | **Upload** | Single upload, or bulk upload of up to 10 files at once. |
 | **Review** | The original file is shown next to the extracted values (zoom and pan for PDFs). Any value can be corrected by hand. |
-| **Excel** | One workbook per year, one sheet per month. Save one document or a whole page at once. |
 | **Accounts** | Email and password, or Google Sign-In. New accounts wait for admin approval. |
 | **Chat** | A small text chat between each user and the admins, inside both apps. |
-| **Admin panel** | Approve users, handle password requests, browse all documents and workbooks, read the audit log, answer chat, and run maintenance. |
+| **Admin panel** | Approve users, handle password requests, browse all documents, read the audit log, answer chat, and run maintenance. |
 
-Each person only ever sees their own documents, workbooks and export history.
+Each person only ever sees their own documents.
 
 ## How a document is read
 
@@ -81,7 +78,7 @@ Each person only ever sees their own documents, workbooks and export history.
  Safety checks (plain Python, no AI) ── type check, format fixes, review flags
         │
         ▼
- You review and correct ── then save to Excel
+ You review and correct
 ```
 
 Things worth knowing:
@@ -100,7 +97,6 @@ flowchart LR
         A["Admin app<br/>React, port 4000"]
         API["Backend API<br/>FastAPI, port 2000"]
         OCR["PaddleOCR<br/>header crop, one job at a time"]
-        XLS[("backend/exports/<br/>per-user .xlsx workbooks")]
     end
     DB[("MongoDB Atlas<br/>users, documents, audit, chat<br/>files in GridFS")]
     G["Groq<br/>header text only"]
@@ -110,11 +106,10 @@ flowchart LR
     API --> OCR
     API -->|"header text"| G
     API --> DB
-    API --> XLS
 ```
 
 - The two web apps are static builds served on this PC. They call the backend through `/api`.
-- The backend keeps all records and uploaded files in MongoDB Atlas. Excel workbooks are real files on this PC.
+- The backend keeps all records and uploaded files in MongoDB Atlas.
 - Only the text of the page header is sent to Groq. The image and the rest of the page never leave the PC.
 
 ## Quick start
@@ -199,13 +194,12 @@ If a request is rejected, or access is later removed, the sign-in page shows the
 1. Open **Upload**, choose **Tax Invoice** or **Delivery Challan**, and add a file. For several files, use bulk upload (up to 10).
 2. Wait while the document is read. You can leave the page; progress is saved. For the best results with a phone photo, lay the page flat, keep the header in focus and use even light.
 3. Check the values against the original shown beside them. Click **Edit** on any field to correct it.
-4. Press **Save to Excel**.
 
 **Reading problems are shown, not hidden:**
 
 | Message | Meaning |
 |---|---|
-| **Number not read** | No number was found. Reprocess the document or type the number. The document cannot be saved to Excel until it has one. |
+| **Number not read** | No number was found. Reprocess the document or type the number. |
 | **Looks incomplete** | The number is not in the usual shape (for example a digit is missing). It is kept exactly as read. Check it against the original. |
 | **Please check this date** | The date is real but unlikely: more than a day in the future, or more than five years old. |
 
@@ -216,7 +210,6 @@ If a request is rejected, or access is later removed, the sign-in page shows the
 | **Dashboard** | See totals, recent documents and your document types at a glance. |
 | **My Documents** | Browse by type, month and upload date. Save or download a whole page at once. |
 | **View All Details** | See every document's extracted values in one table, sortable and paged. |
-| **Export History** | Re-download the workbooks you have created. |
 | **My Activity** | Review your own uploads, corrections, saves and deletes. |
 | **Help** | Short answers to common questions. |
 
@@ -246,26 +239,6 @@ Both apps have a **Chat** button in the top bar. It opens a panel on the right (
 - **Limits.** 20 file sends per hour for a user, 60 for an admin; these also count toward the normal message limits.
 - Deleting a user, clearing a chat (by age or all of it) or running the wipe script deletes the chat files too. The clear dialogs show how many messages and files will go.
 
-## Excel export rules
-
-- Each user gets **one workbook per year**, with **one sheet per month**.
-- A document is filed by **its own date**, not by the day you upload or save it. A paper dated 20 December and saved in January goes into the December sheet of the earlier year.
-- Each row has four columns: **Document Type, Number, Date, Timestamp**.
-- A workbook name is unique for each user. "Bills", "bills" and "Bills.xlsx" count as the same name, so an existing workbook is never replaced by accident. If the name is taken you see "A workbook with this name already exists." and can pick another.
-- **Save Again** replaces the earlier row for that document. It does not add a duplicate.
-- When a new year starts, the old workbook is archived and you are asked to name the new one. Old workbooks stay on disk, untouched.
-- Writes are safe if the workbook is open in Excel: the file is written aside and swapped in, and if Excel holds it you are told it is busy and nothing is lost.
-- **Save All** saves one page of documents. Each document succeeds or fails on its own, and failures are listed with the reason.
-
-**Rules at save time**
-
-| Situation | What happens |
-|---|---|
-| No number | **Blocked.** For a Delivery Challan the number must be present. For a Tax Invoice at least one of Tax Invoice No. or Reference No. must be present. |
-| No date, or an odd date | Saved, with a notice. A missing date uses the save date. |
-| Same type, number and date as another saved document | **Saved, with a warning** to check it is not a duplicate. |
-| Document edited while it was being saved | The row may hold the earlier values. You are told to press Save Again, and the document is not marked as exported. |
-
 ## Data quality safeguards
 
 The AI is helpful but not trusted. Every value goes through plain code before you see it:
@@ -286,7 +259,7 @@ Open <http://localhost:4000> and sign in with an admin account. The dashboard, U
 | **Users** | Search and view users, change the email of a password account (accounts that sign in with Google use their Google address), delete a user. |
 | **Approvals** | Approve, reject (with an optional reason), revoke or re-approve. This includes people who signed up with Google. |
 | **Password requests** | See who asked for a reset and set a temporary password. |
-| **Documents, Workbooks** | Browse every user's data. Admin access to another user's data is written to the audit log. |
+| **Documents** | Browse every user's data. Admin access to another user's data is written to the audit log. |
 | **Chat** | The chat button in the top bar opens the admin chat panel. Reply to users, pick a thread, and clear one user's chat by age. |
 | **Activity** | The audit log. |
 | **Orphaned files** | Files left behind by a failed cleanup, for follow-up. |
@@ -299,15 +272,14 @@ Admins are created from the environment settings by the seed script and cannot b
 - **Approval gate.** Every protected route checks the account is approved, even for a token issued earlier.
 - **Sessions.** Login tokens last 7 days and are cancelled immediately by a password change, an email change, a rejection, or linking Google sign-in to a password account (admin accounts are not affected by the link).
 - **Passwords.** 8 to 64 characters with an uppercase letter, a lowercase letter, a number and a special character, no spaces, and not containing the username or email name. Stored as bcrypt hashes.
-- **Data isolation.** Every document, workbook and export query is limited to its owner. Another person's item looks like it does not exist.
+- **Data isolation.** Every document query is limited to its owner. Another person's item looks like it does not exist.
 - **Admin routes.** The role is re-read from the database on every request, never taken from the token.
-- **Rate limits** on sign-in, signup, password-reset requests, upload and workbook creation.
+- **Rate limits** on sign-in, signup, password-reset requests, and upload.
 - **Upload safety.** Size, file type and image-size limits are checked before the file is processed, so a small file cannot expand into gigabytes of memory.
 - **Browser protections.** Strict security headers and a fixed list of allowed origins.
 - **Chat files.** The file type is decided from the file's bytes, never its name or the browser's claim. Images are re-encoded (which drops hidden data and anything appended to the file) and checked for oversized dimensions and animation. A file is served only with its own validated type, `nosniff`, `Content-Security-Policy: default-src 'none'; sandbox` and `Cache-Control: no-store`; images are shown inline and PDFs as downloads. A stranger, an unknown id and a malformed id all get the same "not found". **There is no antivirus scan**: a PDF is stored as sent, so treat PDFs from outside like any other download.
 - **Secrets stay out of the log.** Keys, tokens and passwords are masked before anything is written to it.
 - **Google Sign-In.** The Google token is verified on the server against your client ID, and the Google email must be verified. A new Google user still waits for approval.
-- **Downloads.** A user's workbook download is served only from the exports folder and only with the owner's user ID in its file name, so a crafted name cannot reach another file.
 - **Local only.** The servers listen on `127.0.0.1`. The API documentation pages are off unless `ENABLE_DOCS=true`.
 - **Login token storage.** The browser keeps the login token in local storage, so any script injected into the page could read it. Both apps avoid inserting raw HTML, and tokens end at once on password change, rejection or removal. Keep the PC itself trusted.
 - **Secrets in the repository.** `backend/.env` is ignored by git and never committed. `backend/.env.example` holds names only. Test files contain obviously fake keys used to test log masking.
@@ -341,7 +313,7 @@ Chat attachments live in their own database area (`chatfs`), separate from docum
 
 ### Backups
 
-Take regular `mongodump` backups of the database, and copy the `backend/exports/` folder, which holds the Excel workbooks. Each workbook file is named `<userId>_<workbook name>.xlsx`, so every user's files are easy to tell apart. Uploaded documents are stored inside the database itself.
+Take regular `mongodump` backups of the database. Uploaded documents are stored inside the database itself.
 
 ## Development
 
@@ -357,7 +329,7 @@ Take regular `mongodump` backups of the database, and copy the `backend/exports/
 
 ```text
 backend/    FastAPI app, one folder per feature under app/features
-            (auth, documents, ocr, excel, admin, chat)
+            (auth, documents, ocr, admin, chat)
 frontend/   User app (port 3000)
 admin/      Admin app (port 4000)
 docs/       Extra notes, such as the admin screen map
@@ -392,7 +364,7 @@ cd backend
 ../venv/Scripts/python.exe -m pytest app
 ```
 
-The backend suite has close to 800 test functions (more cases once parametrised) covering sign-in and approval, per-user isolation, the reading pipeline, Excel saving, admin actions and the maintenance scripts. A full run is slow (hours) because the tests use a real MongoDB Atlas database (a separate `_test` one), so each step is a network round trip. Running one folder or file is much faster, for example `pytest app/features/auth`.
+The backend suite has close to 800 test functions (more cases once parametrised) covering sign-in and approval, per-user isolation, the reading pipeline, admin actions and the maintenance scripts. A full run is slow (hours) because the tests use a real MongoDB Atlas database (a separate `_test` one), so each step is a network round trip. Running one folder or file is much faster, for example `pytest app/features/auth`.
 
 Tests are safe by design. `backend/conftest.py` forces a database whose name ends in `_test` and a separate test-only signing secret, and stops immediately if that is ever not the case. Set `TRANSPORT_TEST_DB` to choose a different `_test` database name, for example to run two test sessions side by side.
 
@@ -408,5 +380,4 @@ The frontend and admin apps have small plain Node scripts in `frontend/tests/` a
 | Documents stay in "uploaded" | Check `backend/logs/app.log`. A missing Groq key or a retired model is reported there. |
 | "The AI service is not set up correctly" | Check `GROQ_API_KEYS` and `GROQ_MODEL`, then restart. |
 | "The AI answer was cut off" | Press **Reprocess**. If it repeats, raise `GROQ_MAX_TOKENS` (up to 4000) in `backend/.env` and restart. |
-| A save says the workbook is busy | Close the workbook in Excel and save again. |
 | A page looks old after an update | Run `setup.bat` again so both apps are rebuilt. |

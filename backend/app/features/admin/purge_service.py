@@ -4,7 +4,6 @@ purge routes (documents/router.py) unchanged in behavior - only the caller
 changed (admin instead of the account owner) and the scope became
 parameterizable (a single user vs every user)."""
 
-from collections import defaultdict
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -17,7 +16,6 @@ from app.core.database import get_database
 from app.core.security import verify_password
 from app.core.timezones import IST
 from app.features.auth.dependencies import CurrentUser
-from app.features.excel import service as excel_service
 
 
 class ConfirmedDeleteBody(Protocol):
@@ -104,54 +102,3 @@ def build_months_filter(year: int, months: Sequence[int], user_id: ObjectId | No
     if user_id is not None:
         filter_query["userId"] = user_id
     return filter_query
-
-
-async def remove_exported_rows_from_workbooks(
-    exported_rows: list[dict],
-) -> tuple[int, list[str]]:
-    """Groups the exported-row records being purged by workbookId, surgically
-    removes just those rows from each workbook's physical .xlsx (matching by
-    (documentType, formatted-number, date) - rows have no stable ID, same
-    convention as excel/service.py's append path), and reports which
-    workbooks ended up with zero data rows left across every sheet (deleted
-    from disk entirely rather than left as an empty shell). Already
-    user-agnostic - workbookId alone determines which physical file a row
-    belongs to, so this works unchanged whether the purged rows span one
-    user or every user."""
-    by_workbook: dict[ObjectId, list[dict]] = defaultdict(list)
-    for row in exported_rows:
-        if row.get("workbookId"):
-            by_workbook[row["workbookId"]].append(row)
-
-    db = get_database()
-    total_removed = 0
-    fully_deleted_filenames: list[str] = []
-    now = datetime.now(UTC)
-    for workbook_id, rows in by_workbook.items():
-        wb = await db.workbooks.find_one({"_id": workbook_id})
-        if not wb:
-            continue
-        physical_filename = excel_service.physical_workbook_filename(wb["userId"], wb["filename"])
-        try:
-            removed, fully_empty = await excel_service.remove_rows(physical_filename, rows)
-        except Exception as exc:  # noqa: BLE001
-            # A corrupt, missing-sheet or Excel-locked workbook must not abort
-            # the purge halfway: by this point every matched document's GridFS
-            # file is already gone, so bailing out here used to leave document
-            # records pointing at deleted files (and every retry failed the
-            # same way). The documents/rows are still purged; the stale
-            # spreadsheet rows are flagged in the audit log for manual cleanup.
-            await log_action(
-                wb["userId"],
-                "purge_workbook_cleanup_failed",
-                {"workbook": wb["filename"], "error": type(exc).__name__},
-            )
-            continue
-        total_removed += removed
-        if fully_empty:
-            fully_deleted_filenames.append(wb["filename"])
-            await db.workbooks.update_one(
-                {"_id": workbook_id},
-                {"$set": {"isActive": False, "archivedAt": now, "updatedAt": now}},
-            )
-    return total_removed, fully_deleted_filenames

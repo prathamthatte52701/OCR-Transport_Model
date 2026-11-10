@@ -36,15 +36,6 @@ const TOPICS = [
     ],
   },
   {
-    q: 'I clicked Save/Export and nothing seems to have happened',
-    a: [
-      '"Save" only works once a document has finished processing (status shows "Processed"). If it still says "Uploaded" or "Processing", wait a bit and try again.',
-      'If there is no active Excel workbook yet, "Save" will tell you so - go to "My Documents" and click "Start New Excel File" first, then try saving again.',
-      'If nothing downloads when you click "Export" on the Dashboard, check your browser\'s download folder or download bar - some browsers save the file quietly without a popup.',
-      'If you see a red message instead of a download, read the message - it tells you exactly what went wrong.',
-    ],
-  },
-  {
     q: 'I can\'t log in - is it a wrong password, or something else?',
     a: [
       'If the page says "Invalid email or password", either your email or password is wrong. Check for typos, and make sure Caps Lock is off.',
@@ -92,15 +83,6 @@ const TOPICS = [
       'The app always asks "Delete this document? This cannot be undone." before actually deleting anything - if you see that popup, click Cancel and you are safe.',
       'If you already confirmed the delete, it genuinely cannot be undone by you from within the app.',
       'If this was important data, contact your admin - they may be able to help depending on how recently it happened.',
-    ],
-  },
-  {
-    q: 'I saved a document but I don\'t see it in my Excel file',
-    a: [
-      'Your Excel workbook has a separate sheet/tab for each month, and it is based on the DATE PRINTED ON THE DOCUMENT - not the day you clicked Save.',
-      'For example, if a document is dated 15/06/2026 and you save it in July, it goes into the "June" sheet, not "July".',
-      'Open the Excel file and check the sheet tabs at the bottom of the window for the month matching the document\'s own date.',
-      'If a document\'s Date field itself is wrong, fix it first (Edit) - otherwise it will keep landing on the wrong month\'s sheet.',
     ],
   },
   {

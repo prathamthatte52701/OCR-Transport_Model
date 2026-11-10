@@ -1,8 +1,5 @@
 import { Link } from 'react-router-dom'
-import { toast } from 'sonner'
 import { displayNumber, numberNotRead } from '../utils/documentDisplay'
-import { useSaveDocumentMutation } from '../hooks/useDocumentMutations'
-import { confirmAction } from '../store/dialogStore'
 
 const statusStyles = {
   uploaded: 'border-sky-400/25 bg-sky-400/10 text-sky-300',
@@ -27,24 +24,6 @@ function StatusBadge({ status }) {
 
 export default function DocumentCard({ doc, serialNumber }) {
   const status = doc.uploadStatus || 'uploaded'
-  const saveMutation = useSaveDocumentMutation()
-
-  async function handleSave() {
-    if (doc.exported) {
-      const ok = await confirmAction({
-        title: 'Save again?',
-        message: 'This document is already in Excel. Saving again will replace the old row.',
-        confirmLabel: 'Yes, Save Again',
-      })
-      if (!ok) return
-    }
-    try {
-      const message = await saveMutation.mutateAsync(doc._id)
-      if (message) toast.success(message)
-    } catch (err) {
-      toast.error(err.userMessage || 'Could not save this document to Excel. Please try again.')
-    }
-  }
 
   return (
     <article className={`group relative overflow-hidden rounded-3xl border-2 border-white/12 bg-slate-900/64 p-5 shadow-[0_24px_90px_rgba(2,8,23,0.34)] backdrop-blur-xl transition-all duration-300 hover:-translate-y-1 hover:border-blue-300/40 hover:shadow-[0_28px_110px_rgba(37,99,235,0.16)]`}>
@@ -77,26 +56,13 @@ export default function DocumentCard({ doc, serialNumber }) {
       </div>
       {numberNotRead(doc) && <p className="relative mt-2 text-[12.6px] text-amber-400">Number not read</p>}
 
-      <div className="relative mt-4 grid grid-cols-2 gap-3">
+      <div className="relative mt-4 grid gap-3">
         <Link
           to={`/documents/${doc._id}`}
           className="inline-flex items-center justify-center gap-2 rounded-xl border border-blue-300/18 bg-slate-950/32 px-3 py-3 text-[14.7px] font-bold text-slate-200 no-underline transition-all hover:border-blue-300/35 hover:bg-blue-500/10"
         >
           View Details
         </Link>
-        {status === 'processed' ? (
-          <button
-            onClick={handleSave}
-            disabled={saveMutation.isPending}
-            className="inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-600 to-emerald-500 px-3 py-3 text-[14.7px] font-black text-white shadow-[0_16px_38px_rgba(16,185,129,0.28)] transition-all hover:-translate-y-0.5 hover:shadow-[0_18px_48px_rgba(16,185,129,0.38)] disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {saveMutation.isPending ? 'Saving...' : doc.exported ? 'Save Again' : 'Save'}
-          </button>
-        ) : (
-          <span className="inline-flex cursor-not-allowed items-center justify-center rounded-xl border border-white/8 bg-white/[0.025] px-3 py-3 text-[14.7px] font-bold text-slate-600">
-            Save
-          </span>
-        )}
       </div>
     </article>
   )

@@ -4,12 +4,10 @@ import { useNavigate, Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { AlertCircle } from 'lucide-react'
 import { uploadDocument, getDocument, bulkUploadDocuments, correctDocument } from '../api/documents'
-import { saveDocument } from '../api/excel'
 import { validateDocumentFile } from '../utils/documentValidation'
 import UploadCard from '../components/UploadCard'
 import CorrectionModal from '../components/CorrectionModal'
 import LazyDocumentViewer from '../components/LazyDocumentViewer'
-import { confirmAction } from '../store/dialogStore'
 import challanRouteVisual from '../assets/transport-bill-route-visual.png'
 import {
   BULK_WAIT_LIMIT_MS,
@@ -339,7 +337,6 @@ export default function UploadPage() {
               dateNeedsReview: polled.dateNeedsReview,
               taxInvoiceNoNeedsReview: polled.taxInvoiceNoNeedsReview,
               referenceNoNeedsReview: polled.referenceNoNeedsReview,
-              exported: polled.exported,
             }
           }
           if (outcome === 'failed') return { docId: f.docId, status: 'failed', error: polled.processingError || 'Processing failed.' }
@@ -372,7 +369,6 @@ export default function UploadPage() {
               dateNeedsReview: u.dateNeedsReview,
               taxInvoiceNoNeedsReview: u.taxInvoiceNoNeedsReview,
               referenceNoNeedsReview: u.referenceNoNeedsReview,
-              exported: u.exported,
             }
           }
           if (timedOut && f.status === 'processing' && f.docId) return { ...f, status: 'slow', error: '' }
@@ -442,33 +438,6 @@ export default function UploadPage() {
     mutationFn: ({ docId, field, value }) => correctDocument(docId, field, value),
   })
 
-  // Exposes the same saveDocument() flow used on DocumentDetailPage/
-  // DocumentCard directly from the paginated bulk-review card, so the user
-  // never has to leave this view to export what they're already reviewing.
-  const reviewSaveMutation = useMutation({
-    mutationFn: (docId) => saveDocument(docId),
-  })
-
-  async function handleReviewSave(docId, alreadyExported) {
-    if (alreadyExported) {
-      const ok = await confirmAction({
-        title: 'Save again?',
-        message: 'This document is already in Excel. Saving again will replace the old row.',
-        confirmLabel: 'Yes, Save Again',
-      })
-      if (!ok) return
-    }
-    try {
-      const message = await reviewSaveMutation.mutateAsync(docId)
-      if (message) {
-        toast.success(message)
-        setBulkFiles((prev) => prev.map((f) => (f.docId === docId ? { ...f, exported: true } : f)))
-      }
-    } catch (err) {
-      toast.error(err.userMessage || 'Could not save this document to Excel. Please try again.')
-    }
-  }
-
   async function handleReviewCorrect(field, newValue) {
     const docId = reviewEditingField?.docId
     if (!docId) {
@@ -488,7 +457,6 @@ export default function UploadPage() {
             dateNeedsReview: updated.dateNeedsReview,
             taxInvoiceNoNeedsReview: updated.taxInvoiceNoNeedsReview,
             referenceNoNeedsReview: updated.referenceNoNeedsReview,
-            exported: updated.exported,
           }
         : f)))
       setReviewEditingField(null)
@@ -590,19 +558,6 @@ export default function UploadPage() {
 
                     {reviewItem.status === 'done' ? (
                       <div className="space-y-2">
-                        <div className="flex justify-end">
-                          <button
-                            onClick={() => handleReviewSave(reviewItem.docId, reviewItem.exported)}
-                            disabled={reviewSaveMutation.isPending}
-                            className="rounded-lg bg-emerald-700 px-4 py-2 text-[12.6px] font-bold text-white transition-colors hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            {reviewSaveMutation.isPending
-                              ? 'Saving...'
-                              : reviewItem.exported
-                                ? 'Save Again'
-                                : 'Save to Excel'}
-                          </button>
-                        </div>
                         {reviewFieldsFor(reviewItem).map((f) => {
                           return (
                             <div key={f.key} className={`flex items-center justify-between gap-3 rounded-xl border bg-white/[0.03] px-4 py-3 border-white/10`}>

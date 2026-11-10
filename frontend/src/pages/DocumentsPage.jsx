@@ -4,13 +4,10 @@ import { toast } from 'sonner'
 import { Upload } from 'lucide-react'
 import { useDocumentsList } from '../hooks/useDocumentsQueries'
 import {
-  useBulkSaveDocumentsMutation,
   useDownloadAllDocumentsMutation,
-  useNewExcelFileMutation,
 } from '../hooks/useDocumentMutations'
 import DocumentList from '../components/DocumentList'
 import PageBackground from '../components/PageBackground'
-import { confirmAction, promptText } from '../store/dialogStore'
 import BackButton from '../components/BackButton'
 import { UPLOAD_RANGES } from '../utils/uploadRange'
 
@@ -99,8 +96,6 @@ export default function DocumentsPage() {
 
   const dayKey = useLocalDay()
   const [page, setPage] = useState(1)
-  const newExcelFileMutation = useNewExcelFileMutation()
-  const bulkSaveMutation = useBulkSaveDocumentsMutation()
   const downloadAllMutation = useDownloadAllDocumentsMutation()
 
   // A new/changed search, group tab, or date range should always land on page 1.
@@ -170,86 +165,8 @@ export default function DocumentsPage() {
     if (monthNumber) selectMonth(`${year}-${monthNumber}`)
   }
 
-  // Scoped strictly to `documents` - the already-paginated (30/page) result
-  // for the CURRENT page/type/search, never the user's whole dataset. Skips
-  // the per-document "already saved, are you sure?" popup on purpose (every
-  // doc gets re-saved regardless of `exported`, same as an individual Save
-  // Again) but still gates behind one page-level confirmation so a whole
-  // page of duplicate rows is never a surprise.
-  //
-  // Only documents whose OCR finished (uploadStatus === 'processed') are sent: the server
-  // rejects the rest anyway ("not processed yet"), which used to show up as a couple of
-  // failures on a perfectly normal page.
-  const saveAllBusyRef = useRef(false)
-  async function handleSaveAll() {
-    if (saveAllBusyRef.current || bulkSaveMutation.isPending) return // ignore re-entry / double clicks
-    const processed = documents.filter((d) => d.uploadStatus === 'processed')
-    const skipped = documents.length - processed.length
-    if (processed.length === 0) {
-      toast.info('Nothing to save - none of the documents on this page are processed yet.')
-      return
-    }
-    saveAllBusyRef.current = true
-    try {
-      const ok = await confirmAction({
-        title: 'Save all documents on this page?',
-        message: `${processed.length} will be saved${skipped > 0 ? `, ${skipped} skipped (not processed yet)` : ''}. Documents already in Excel will have their old row replaced. Continue?`,
-        confirmLabel: 'Yes, Save All',
-      })
-      if (!ok) return
-      reportSaveAll(await bulkSaveMutation.mutateAsync(processed.map((d) => d._id)))
-    } catch (err) {
-      if (!err.response) {
-        // timeout / network drop: the server may have saved some or all rows already, so do not
-        // retry on its own and warn instead of claiming failure (the list refetches by itself)
-        toast.warning('Save may have partly completed. Check Export History before saving again.')
-      } else {
-        toast.error(err.userMessage || 'Could not save documents. Please try again.')
-      }
-    } finally {
-      saveAllBusyRef.current = false
-    }
-  }
-
-  function reportSaveAll(result) {
-    const saved = result.succeeded.length
-    if (result.cancelled) {
-      toast.info(`No workbook name given - ${saved} saved, the rest were not saved.`)
-      return
-    }
-    if (result.blocked) {
-      toast.error(result.blocked.message || 'Could not create an Excel workbook. Please try again.')
-      return
-    }
-    const failed = result.failed
-    if (result.staleWarnings?.length) {
-      const more = result.staleWarnings.length - 1
-      toast.warning(`${result.staleWarnings[0].message}${more > 0 ? ` (+${more} more documents need a second look)` : ''}`)
-    }
-    const replacedNote = result.replaced > 0 ? ` (${result.replaced} old ${result.replaced === 1 ? 'row' : 'rows'} replaced)` : ''
-    const dateFallback = result.dateFallback.length
-    if (failed.length === 0 && dateFallback === 0) {
-      toast.success(`${saved} saved successfully.${replacedNote}`)
-      return
-    }
-    const reasons = new Map()
-    failed.forEach((f) => reasons.set(f.reason, (reasons.get(f.reason) || 0) + 1))
-    const parts = [`${saved} saved${replacedNote}`]
-    if (failed.length > 0) {
-      parts.push(`${failed.length} failed - ${[...reasons].map(([reason, n]) => `${reason} (${n})`).join('; ')}`)
-    }
-    if (dateFallback > 0) {
-      parts.push(`${dateFallback} had no usable date and went to the sheet of the save date`)
-    }
-    ;(failed.length > 0 ? toast.error : toast.warning)(`${parts.join('. ')}.`)
-  }
-
-  // Scoped strictly to `documents` - same page-scoping contract as Save
-  // All. Documents whose original file was already hard-deleted (purge
-  // file) are silently skipped server-side and reported back via response
-  // headers, not an error - no confirmation needed here since downloading
-  // is non-destructive, only Save All (which writes duplicate rows) gates
-  // behind a popup.
+  // Scoped strictly to `documents` (current page only). Purged files are skipped server-side
+  // and reported via response headers.
   const downloadAllBusyRef = useRef(false)
   async function handleDownloadAll() {
     if (documents.length === 0 || downloadAllBusyRef.current) return
@@ -272,21 +189,6 @@ export default function DocumentsPage() {
       toast.error(err.userMessage || 'Could not download documents. Please try again.')
     } finally {
       downloadAllBusyRef.current = false
-    }
-  }
-
-  async function handleStartNewExcelFile() {
-    const filename = await promptText({
-      title: 'Start a new Excel file',
-      message: 'Name for the new Excel export file:',
-      placeholder: 'e.g. Bills_2026',
-    })
-    if (!filename) return
-    try {
-      const result = await newExcelFileMutation.mutateAsync(filename)
-      toast.success(`New workbook "${result.filename}.xlsx" is ready.`)
-    } catch (err) {
-      toast.error(err.userMessage || 'Could not start a new Excel file. Please try again.')
     }
   }
 
@@ -325,12 +227,6 @@ export default function DocumentsPage() {
             >
               View All Details
             </Link>
-            <button
-              onClick={handleStartNewExcelFile}
-              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-blue-300/20 bg-slate-900/60 px-5 py-3 text-[14.7px] font-bold text-blue-200 transition-all hover:border-blue-300/45 hover:bg-blue-500/10"
-            >
-              Start New Excel File
-            </button>
             <Link
               to="/upload"
               className="inline-flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-blue-600 to-blue-500 px-5 py-3 text-[14.7px] font-black text-white no-underline shadow-[0_18px_45px_rgba(37,99,235,0.34)] transition-all hover:-translate-y-0.5 hover:shadow-[0_22px_60px_rgba(37,99,235,0.45)] focus:outline-none focus:ring-2 focus:ring-blue-300/60"
@@ -451,18 +347,10 @@ export default function DocumentsPage() {
               >
                 {downloadAllMutation.isPending ? 'Preparing...' : `Download All (${documents.length} on this page)`}
               </button>
-              <button
-                type="button"
-                onClick={handleSaveAll}
-                disabled={documents.length === 0 || bulkSaveMutation.isPending}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-300/25 bg-emerald-500/10 px-5 py-2.5 text-[13.6px] font-black text-emerald-200 transition-all hover:border-emerald-300/45 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {bulkSaveMutation.isPending ? `Saving ${documents.length}...` : `Save All (${documents.length} on this page)`}
-              </button>
             </div>
             {totalPages > 1 && (
               <p className="mb-3 text-right text-[12.6px] text-slate-500">
-                Save All and Download All apply to this page only (page {page} of {totalPages})
+                Download All applies to this page only (page {page} of {totalPages})
               </p>
             )}
             <DocumentList documents={documents} startIndex={(page - 1) * PAGE_SIZE} />

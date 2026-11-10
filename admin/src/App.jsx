@@ -11,7 +11,6 @@ import AdminProfilePage from './pages/AdminProfilePage'
 import AdminUsersPage from './pages/AdminUsersPage'
 import AdminUserDetailPage from './pages/AdminUserDetailPage'
 import AdminDocumentsPage from './pages/AdminDocumentsPage'
-import AdminWorkbooksPage from './pages/AdminWorkbooksPage'
 import AdminLogsPage from './pages/AdminLogsPage'
 import AdminOrphanedFilesPage from './pages/AdminOrphanedFilesPage'
 import AdminMaintenancePage from './pages/AdminMaintenancePage'
@@ -48,7 +47,6 @@ function AppRoutes() {
             <Route path="/password-requests" element={<FadeIn><PasswordRequestsPage /></FadeIn>} />
             <Route path="/users/:id" element={<FadeIn><AdminUserDetailPage /></FadeIn>} />
             <Route path="/documents" element={<FadeIn><AdminDocumentsPage /></FadeIn>} />
-            <Route path="/workbooks" element={<FadeIn><AdminWorkbooksPage /></FadeIn>} />
             <Route path="/logs" element={<FadeIn><AdminLogsPage /></FadeIn>} />
             <Route path="/orphaned-files" element={<FadeIn><AdminOrphanedFilesPage /></FadeIn>} />
             <Route path="/maintenance" element={<FadeIn><AdminMaintenancePage /></FadeIn>} />
