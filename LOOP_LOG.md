@@ -31,7 +31,7 @@ Checklist of every feature. Tick after commit. Re-read this + spec at start of e
 - [x] 3.1 Ground truth (spec/ground_truth.json) — pending commit. 18 unique receipts, 20 files (2 duplicate pairs: Pawan GR28625, Baba P98506). 5 spot-check values for owner: baba_p98250 receipt number (overlapped by printed "Date" text), baba_p98010 prepared_by ("Bobby", cut off in photo), baba_p98755/p98635/p98595 consignee_name "Orlicon Blazer" spelling, baba_p98828 two-date handling (used date next to receipt number per spec).
 - [x] 3.2 Scoring script (spec/score.py) + unit tests — pending commit. Strict (trim+lowercase) and lenient (punctuation/spacing, OCR letter-digit confusion on numeric fields only, date-format-agnostic) matchers; core/optional split; worst_fields ranking. 17 synthetic unit tests, all pass.
 - [x] 3.3 Run A (one-by-one) + Run B (bulk 5) -> spec/results.csv — pending commit. All 40 uploads (20 one-by-one + 20 via 4 bulk-of-5 batches) reached "processed" through the real API against the real DB. No failures.
-- [ ] 3.4 Accuracy report (spec/accuracy_report.md)
+- [x] 3.4 Accuracy report (spec/accuracy_report.md) — pending commit. Round 0 (honest, pre-fix): overall strict ~34-35%, core strict ~32%. Found 2 real root causes: operator_gstin 0% across ALL 40 docs (prompt ambiguity, not a code bug), and Baba watermark text leaking into consignor_name/total_amount/from_place on some docs (residual noise from 2.2, worse than hoped). Both go into the 3.5 fix loop.
 - [ ] 3.5 Fix loop (max 3 rounds)
 - [ ] 3.6 Unseen-receipt sanity check (3 receipts)
 - [ ] 3.7 Final hardening verification
