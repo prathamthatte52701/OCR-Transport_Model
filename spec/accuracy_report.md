@@ -112,3 +112,19 @@ they work, but the project does not claim a precise before/after percentage for 
 
 - `spec/mismatches_run_a.csv` - 136 mismatches, Run A.
 - `spec/mismatches_run_b.csv` - 122 mismatches, Run B.
+
+## Unseen-receipt sanity check (spec 3.6)
+
+Three receipts never used during prompt-debugging (picked by filename, shown separately to
+check for overfitting to the images used while fixing prompts):
+
+- `WhatsApp Image 2026-11-10 at 22.01.42 (3).jpeg` (Pawan, GR 28625 duplicate): strict 20/23,
+  lenient 23/23 - every field correct once lenient matching accounts for OCR noise.
+- `WhatsApp Image 2026-11-10 at 22.01.39 (1).jpeg` (Baba, P97300): strict/lenient 6/13.
+- `WhatsApp Image 2026-11-10 at 22.01.40.jpeg` (Baba, P97990): strict/lenient 6/14.
+
+These numbers come from the same Round 1 results.csv as the headline report above, which (per
+the honesty note there) predates the toPlace/packageCount/label-leak fixes - so the two Baba
+numbers here are a pessimistic lower bound, not a final measurement. No evidence of overfitting
+to specific tuned images: the Pawan result is consistent with other Pawan receipts, and the two
+Baba results are consistent with the overall Baba accuracy level reported above, not worse.
