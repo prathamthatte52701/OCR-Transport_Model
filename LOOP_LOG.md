@@ -29,7 +29,7 @@ Checklist of every feature. Tick after commit. Re-read this + spec at start of e
 
 ## Loop 3 — Proof and Polish
 - [x] 3.1 Ground truth (spec/ground_truth.json) — pending commit. 18 unique receipts, 20 files (2 duplicate pairs: Pawan GR28625, Baba P98506). 5 spot-check values for owner: baba_p98250 receipt number (overlapped by printed "Date" text), baba_p98010 prepared_by ("Bobby", cut off in photo), baba_p98755/p98635/p98595 consignee_name "Orlicon Blazer" spelling, baba_p98828 two-date handling (used date next to receipt number per spec).
-- [ ] 3.2 Scoring script (spec/score.py) + unit tests
+- [x] 3.2 Scoring script (spec/score.py) + unit tests — pending commit. Strict (trim+lowercase) and lenient (punctuation/spacing, OCR letter-digit confusion on numeric fields only, date-format-agnostic) matchers; core/optional split; worst_fields ranking. 17 synthetic unit tests, all pass.
 - [ ] 3.3 Run A (one-by-one) + Run B (bulk 5) -> spec/results.csv
 - [ ] 3.4 Accuracy report (spec/accuracy_report.md)
 - [ ] 3.5 Fix loop (max 3 rounds)
