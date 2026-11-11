@@ -179,33 +179,41 @@ def normalize_photo(
 
     classify_orientation takes PNG bytes of the page and returns
     (clockwise_degrees_needed_to_make_it_upright, confidence). It is only
-    consulted when the photo looks sideways or has real background around the
-    paper - an image that already looks like a scan never reaches it.
+    consulted when the photo looks sideways.
+
+    ponytail: the find_paper/_warp_to_page crop-and-flatten step (ORIENT_PAPER_STEP)
+    is disabled here, not just untuned. It was built for ACKN's "OCR only the top
+    30% header crop" pipeline, where a loose paper-boundary guess was safe even
+    when wrong (worst case: miss the header). Transport OCRs the FULL page, so the
+    same wrong guess now crops away real content - measured on a real Baba Travels
+    photo where find_paper's quad cut off the left half of every line (all labels
+    and the operator's GST number) and OCR accuracy collapsed as a result (verified
+    by comparing OCR of the untouched photo vs the warped crop - the untouched
+    version read the GST number and every label cleanly; the warped one read almost
+    nothing but watermark fragments). Full-page OCR doesn't need a tight paper
+    crop to begin with - PaddleOCR handles a photo with background around the
+    paper fine. Upgrade path: re-enable only after find_paper's quad is verified
+    accurate on a real sample of backgrounded photos, not just the synthetic test
+    fixtures this heuristic was tuned on.
     """
     try:
         img = _decode(image_bytes)
         if img is None:
             return image_bytes, []
-        h, w = img.shape[:2]
         steps: list[str] = []
 
-        paper = find_paper(img)
         page = img
-        has_margin = False
-        if paper is not None:
-            quad, fraction = paper
-            if fraction < _FULL_BLEED_FRACTION:
-                page = _warp_to_page(img, quad)
-                steps.append(ORIENT_PAPER_STEP)
-                has_margin = True
         sideways = page.shape[1] > page.shape[0]
 
-        if (sideways or has_margin) and classify_orientation is not None:
+        if classify_orientation is not None:
+            # Always checked now (not just when sideways/has-margin, which used to come
+            # from the disabled paper-crop step) - a plain upside-down upright-aspect
+            # photo still needs this to catch a 180-degree flip.
             angle, score = classify_orientation(_encode_png(page))
             if angle and score >= _MIN_ORIENTATION_SCORE:
                 page = _rotate(page, angle)
                 steps.append(f"{ORIENT_ROTATE_STEP}:{angle}")
-        elif sideways and classify_orientation is None:
+        elif sideways:
             return image_bytes, []
 
         if not steps:

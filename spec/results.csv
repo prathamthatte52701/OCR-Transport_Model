@@ -1,41 +1,41 @@
 run,file,status,operator_name,operator_gstin,receipt_number,date,time,from_place,to_place,delivery_address,consignor_name,consignor_gstin,consignor_phone,consignee_name,consignee_gstin,consignee_phone,package_count,package_description,payment_mode,freight,delivery_charge,demurrage,sgst,cgst,igst,total_amount,amount_in_words,remark,prepared_by
 A,WhatsApp Image 2026-11-10 at 22.01.33 (1).jpeg,processed,PAWAN TRAVELS,,28625,05/03/2026,11:25AM,INDORE,PUNE,MAYARAM JI8087536777,KLINGELBERG INDIA,27AAECK1993K1Z3,8518888766,VE COMMERCIAL VEHICLES,23AABCE9378F3ZI,8518888766,1,PARCEL-PARCEL,Paid,100,,,0,0,0,100,Rupees One Hundred Only,,PAWAN
 A,WhatsApp Image 2026-11-10 at 22.01.33 (2).jpeg,processed,PAWAN TRAVELS,,41468,16/05/2026,12:45PM,W DORE,PUNE,MAYARAMJI8087536777,KLINGELBERG INDIA,27AAECK1993K1Z3,8518888766,VE COMMERCIAL VEHICLES,23AABCE9378F3ZI,8518888766,,PARCEL-PARCEL,Paid,200,,,0,0,0,200,Rupees Two Hundred Only,SAEDVBOX,PAWAN
-A,WhatsApp Image 2026-11-10 at 22.01.33.jpeg,processed,PAWAN TRAVELS,,38420,29/04/2026,10:04AM,INDORE,PUNE,MAYARAMJI8087536777,KLINGELBERG INDIA,27AAECK1993K1Z3,8518888766,VE COMMERCIAL VEHICLES,23AABCE9378F3ZI,8518888766,2,PARCEL-PARCEL,Paid,200,,,0,0,0,200,Rupees Two Hundred Only,,PAWAN
-A,WhatsApp Image 2026-11-10 at 22.01.34 (3).jpeg,processed,,,,,,,,,,,,,,,,,,,,,,,,,,,
-A,WhatsApp Image 2026-11-10 at 22.01.34.jpeg,processed,,,,,,,,,,,,,,,,,,,,,,,,,,,
-A,WhatsApp Image 2026-11-10 at 22.01.37 (2).jpeg,processed,BABA TRAVELS,,000000,,,,Ahmedabad,,,,,,,,,,Paid,600.00,,,,,,,,,
-A,WhatsApp Image 2026-11-10 at 22.01.37.jpeg,processed,,,P98506,,,RABATN,Ahmedabad,,SBAEATRAVELS,,000000,,,,,,,,,,,,,1000000,,,
+A,WhatsApp Image 2026-11-10 at 22.01.33.jpeg,processed,PAWAN TRAVELS,,38420,29/04/2026,10:04AM,Indore,PUNE,MAYARAMJI8087536777,KLINGELBERG INDIA,27AAECK1993K1Z3,8518888766,VE COMMERCIAL VEHICLES,23AABCE9378F3ZI,8518888766,2,PARCEL-PARCEL,Paid,200,,,0,0,0,200,Rupees Two Hundred Only,,PAWAN
+A,WhatsApp Image 2026-11-10 at 22.01.34 (3).jpeg,processed,Baba Travels,23AHQP$8492M1ZA,,,,,Ve Commercial,Ahmedabad,,,,Ve Commercial,,,,VF,Paid,400.00,,,,,,400.00,,,Shresth Sharma
+A,WhatsApp Image 2026-11-10 at 22.01.34.jpeg,processed,BABA TRAVELS,23AHQPS8492M1ZA,"186,798",,,,,,,,,,,,,Parcel,Paid,0.00,140.00,0.00,,,,140.00,,,
+A,WhatsApp Image 2026-11-10 at 22.01.37 (2).jpeg,processed,BABA TRAVELS,23AHQPS8492M1ZA,,,,,Ahmedabad,,Self,,0000000000,,,0000000000,,,Paid,600.00,,,,,,600.00,,,
+A,WhatsApp Image 2026-11-10 at 22.01.37.jpeg,processed,ELSLASA TRAVELS,23AHQPS8492M1ZA,,,,,Ve Commercial,Ahmedabad,Self,,0000000000,Ve Commercial,,0000000000,,2Parcel,Paid,200.00,,,,,,200.00,,,
 A,WhatsApp Image 2026-11-10 at 22.01.38 (1).jpeg,processed,,,,,,,,,,,,,,,,,,,,,,,,,,,
-A,WhatsApp Image 2026-11-10 at 22.01.38 (2).jpeg,processed,,,P97394,,,,Ahmedabad,,,,,,,000000,,,,,,,,,,,,,
-A,WhatsApp Image 2026-11-10 at 22.01.38.jpeg,processed,BABA TRAVELS,,,,,,Ahmedabad,Ahmedabad,,,,,,,,,Paid,200.00,,,,,,200.00,,,
-A,WhatsApp Image 2026-11-10 at 22.01.39 (1).jpeg,processed,,,P97300,,,,Ahmedabad,Ahmedabad,Self,,,,,0000000000,4,Parcel,Paid,,,,,,,,,,
-A,WhatsApp Image 2026-11-10 at 22.01.39.jpeg,processed,,,,,,,,Ahmedabad,,,,,,,,,,,,,,,,,,,
-A,WhatsApp Image 2026-11-10 at 22.01.40 (1).jpeg,processed,Baba Travels,,P98506,,,,Ahmedabad,,,,,,,0000000,,,,,,,,,,,,,
-A,WhatsApp Image 2026-11-10 at 22.01.40 (2).jpeg,processed,,,,,,,,,,,,,,,,,,,,,,,,,,,
-A,WhatsApp Image 2026-11-10 at 22.01.40.jpeg,processed,BABA TRAVELS,,,,,,,Ahmedabad,,,,,,,,,Paid,800.00,,,,,,,,,
-A,WhatsApp Image 2026-11-10 at 22.01.41 (1).jpeg,processed,,,P98347,,,,Ahmedabad,,,,,,,,,,Paid,,,,,,,400.00,,,
-A,WhatsApp Image 2026-11-10 at 22.01.41 (2).jpeg,processed,Baba Travels,,P98828,10/03/2025,,,,,,,,,,,,S10 ParCeIVELSBABA,,,,,,,,,,,
-A,WhatsApp Image 2026-11-10 at 22.01.41.jpeg,processed,,,,,,,,Ahmedabad,,,,,,,,,,,,,,,,,,,
-A,WhatsApp Image 2026-11-10 at 22.01.42 (3).jpeg,processed,PAWAN TRAVELS,,28625,05/03/2026,11:25AM,INDORE,PUNE,MAYARAM JI8087536777,KLINGELBERG INDIA,27AAECK1993K1Z3,8518888766,VE COMMERCIAL VEHICLES,23AABCE9378F3ZI,8518888766,1,PARCEL-PARCEL,Paid,100,,,0,0,0,100,Rupees One Hundred Only,,PAWAN
-A,WhatsApp Image 2026-11-10 at 22.01.54 (2).jpeg,processed,Baba Travels,,,,,,,Ahmedabad,,,,,,,,,,,,,,,,,,,
-B,WhatsApp Image 2026-11-10 at 22.01.33 (1).jpeg,processed,PAWAN TRAVELS,,28625,05/03/2026,11:25AM,INDORE,PUNE,MAYARAM JI8087536777,KLINGELBERG INDIA,27AAECK1993K1Z3,8518888766,VE COMMERCIAL VEHICLES,23AABCE9378F3ZI,8518888766,1,PARCEL-PARCEL,Paid,100,,,0,0,0,100,One Hundred Only,,PAWAN
+A,WhatsApp Image 2026-11-10 at 22.01.38 (2).jpeg,processed,Baba Travels,23AHQPS8492M1ZA,P97394,,,,ToVe Commercial,Ahmedabad,Self,,000000000,ToVe Commercial,,0000000000,,3Parcel,Paid,300.00,,,,,,300.00,,,
+A,WhatsApp Image 2026-11-10 at 22.01.38.jpeg,processed,BABA TRAVELS,23AHQPS&492M1ZA,,,,,MAR,,Self,,,ToVe Commercila,,0000000000,,2Parcel,Paid,200.00,,,,,,,,,
+A,WhatsApp Image 2026-11-10 at 22.01.39 (1).jpeg,processed,Baba Travels,AMOD92M1ZA,P97300,13/01/2025,,ELSBAL,ToVe Commercial,Ahmedabad,Self,,,ToVe Commercial,,0000000000,,4Parcel,Paid,,,,,,,,,,
+A,WhatsApp Image 2026-11-10 at 22.01.39.jpeg,processed,Baba Travels,23AHQPS8492M1ZA,,,,,Ve Commercial,Ahmedabad,Self,,0000000000,Ve Commercial,,0000000000,,4 Parcel,Paid,400.00,,,,,,400.00,,,
+A,WhatsApp Image 2026-11-10 at 22.01.40 (1).jpeg,processed,Baba Travels,,OLSHASIAVEL,,,,Ahmedabad,,Self,,0000000000,,,,,2 Parcel,Paid,200.00,,,,,,200.00,,,
+A,WhatsApp Image 2026-11-10 at 22.01.40 (2).jpeg,processed,BABA TRAVELS,,,,,,,,,,,,,,,,,,,,,,,,,,
+A,WhatsApp Image 2026-11-10 at 22.01.40.jpeg,processed,BABA TRAVELS,23AHQPS8492M1ZA,02/2025,,,,Ahmedabad,Ahmedabad,,,,,,0000000000,,,Paid,800.00,,,,,,800.00,,,
+A,WhatsApp Image 2026-11-10 at 22.01.41 (1).jpeg,processed,Baba Travels,23AHQPS8492M1ZA,P98347,,,,Ve Commercial,Ahmedabad,Self,,0000000000,Ve Commercial,,0000000000,,C 4Parcel,Paid,400.00,,,,,,,,,
+A,WhatsApp Image 2026-11-10 at 22.01.41 (2).jpeg,processed,Baba Travels,,,,,,,,,,,,,,,S10 Parcel,Paid,0.00,,,,,,,,,
+A,WhatsApp Image 2026-11-10 at 22.01.41.jpeg,processed,BABA TRAVELS,23AHQPS8492M1ZA,B.0.27,,,,Ve Commercial,Ahmedabad,Self,,,,,0000000000,,5 Parcel,Paid,500.00,,,,,,500.00,,,
+A,WhatsApp Image 2026-11-10 at 22.01.42 (3).jpeg,processed,PAWAN TRAVELS,,28625,05/03/2026,11:25AM,Indore,PUNE,MAYARAM JI8087536777,KLINGELBERG INDIA,27AAECK1993K1Z3,8518888766,VE COMMERCIAL VEHICLES,23AABCE9378F3ZI,8518888766,1,PARCEL-PARCEL,Paid,100,,,0,0,0,100,Rupees One Hundred Only,,PAWAN
+A,WhatsApp Image 2026-11-10 at 22.01.54 (2).jpeg,processed,BABA TRAVELS,,,,,,,,,,,,,,,,,,,,,,,,,,
+B,WhatsApp Image 2026-11-10 at 22.01.33 (1).jpeg,processed,PAWAN TRAVELS,,28625,05/03/2026,11:25AM,,PUNE,MAYARAM JI8087536777,KLINGELBERG INDIA,27AAECK1993K1Z3,8518888766,VE COMMERCIAL VEHICLES,23AABCE9378F3ZI,8518888766,1,PARCEL-PARCEL,Paid,100,,,0,0,0,100,One Hundred Only,,PAWAN
 B,WhatsApp Image 2026-11-10 at 22.01.33 (2).jpeg,processed,PAWAN TRAVELS,,41468,16/05/2026,12:45PM,W DORE,PUNE,MAYARAMJI8087536777,KLINGELBERG INDIA,27AAECK1993K1Z3,8518888766,VE COMMERCIAL VEHICLES,23AABCE9378F3ZI,8518888766,,PARCEL-PARCEL,Paid,200,,,0,0,0,200,Rupees Two Hundred Only,SAEDVBOX,PAWAN
 B,WhatsApp Image 2026-11-10 at 22.01.33.jpeg,processed,PAWAN TRAVELS,,38420,29/04/2026,10:04AM,INDORE,PUNE,MAYARAMJI8087536777,KLINGELBERG INDIA,27AAECK1993K1Z3,8518888766,VE COMMERCIAL VEHICLES,23AABCE9378F3ZI,8518888766,2,PARCEL-PARCEL,Paid,200,,,0,0,0,200,Rupees Two Hundred Only,,PAWAN
-B,WhatsApp Image 2026-11-10 at 22.01.34 (3).jpeg,processed,,,,,,,,,,,,,,,,,,,,,,,,,,,
-B,WhatsApp Image 2026-11-10 at 22.01.34.jpeg,processed,Baba Travels,,,,,,,,,,,,,,,,,,,,,,,,,,
-B,WhatsApp Image 2026-11-10 at 22.01.37 (2).jpeg,processed,Baba Travels,,,,,,,,,,,,,,,,Paid,600.00,,,,,,600.00,,,
-B,WhatsApp Image 2026-11-10 at 22.01.37.jpeg,processed,Baba Travels,,P98506,,,RABATN,,Ahmedabad,,,,AVELSBABATRA,,000000,,,,1000000,,,,,,1000000,,,
+B,WhatsApp Image 2026-11-10 at 22.01.34 (3).jpeg,processed,BABA TRAVELS,23AHQP$8492M1ZA,,01/04/2026,17:59,,Ve Commercial,Ahmedabad,,,,Ve Commercial,,,,VF,Paid,400.00,,,,,,400.00,,,Shresth Sharma
+B,WhatsApp Image 2026-11-10 at 22.01.34.jpeg,processed,BABA TRAVELS,23AHQPS8492M1ZA,"186,798",,,,,,,,,,,,,Parcel,Paid,0.00,140.00,0.00,,,,140.00,,,
+B,WhatsApp Image 2026-11-10 at 22.01.37 (2).jpeg,processed,BABA TRAVELS,23AHQPS8492M1ZA,,,,,Ahmedabad,,Self,,,,,0000000000,2,,Paid,600.00,,,,,,600.00,,,Alok Sen
+B,WhatsApp Image 2026-11-10 at 22.01.37.jpeg,processed,Baba Travels,23AHQPS8492M1ZA,,,,,Ve Commercial,Ahmedabad,ELSLASA TRAVELS OAGS TSAWE,,0000000000,Ve Commercial,,0000000000,2,Parcel,Paid,200.00,,,,,,200.00,,,
 B,WhatsApp Image 2026-11-10 at 22.01.38 (1).jpeg,processed,,,,,,,,,,,,,,,,,,,,,,,,,,,
-B,WhatsApp Image 2026-11-10 at 22.01.38 (2).jpeg,processed,,,P97394,,,,Ahmedabad,Ahmedabad,,,,,,000000,,,,,,,,,,,,,
-B,WhatsApp Image 2026-11-10 at 22.01.38.jpeg,processed,BABA TRAVELS,,,,,,Ahmedabad,Ahmedabad,,,,,,,,,Paid,200.00,,,,,,200.00,,,
-B,WhatsApp Image 2026-11-10 at 22.01.39 (1).jpeg,processed,,,P97300,,,,,Ahmedabad,Self,,,,,0000000000,4,Parcel E,Paid,,,,,,,,,,
-B,WhatsApp Image 2026-11-10 at 22.01.39.jpeg,processed,,,,,,,,Ahmedabad,,,,,,,,,,,,,,,,,,,
-B,WhatsApp Image 2026-11-10 at 22.01.40 (1).jpeg,processed,,,P98506,,,,,Ahmedabad,,,,,,0000000,,,,,,,,,,,,,
+B,WhatsApp Image 2026-11-10 at 22.01.38 (2).jpeg,processed,Baba Travels,23AHQPS8492M1ZA,P97394,,,,ToVe Commercial,Ahmedabad,Self,,000000000,ToVe Commercial,,0000000000,3,Parcel,Paid,300.00,,,,,,300.00,,,
+B,WhatsApp Image 2026-11-10 at 22.01.38.jpeg,processed,BABA TRAVELS,23AHQPS&492M1ZA,,,,,Ahmedabad,,Self,,,ToVe Commercila,,0000000000,2,Parcel,Paid,200.00,,,,,,,,,
+B,WhatsApp Image 2026-11-10 at 22.01.39 (1).jpeg,processed,Baba Travels,,P97300,13/01/2025,,,,Ahmedabad,Self,,,,,0000000000,4,Parcel,Paid,,,,,,,,,,
+B,WhatsApp Image 2026-11-10 at 22.01.39.jpeg,processed,Baba Travels,23AHQPS8492M1ZA,,,,,Ve Commercial,Ahmedabad,Self,,0000000000,Ve Commercial,,0000000000,4,Parcel,Paid,400.00,,,,,,400.00,,,
+B,WhatsApp Image 2026-11-10 at 22.01.40 (1).jpeg,processed,Baba Travels,,OLSHASIAVEL,,,,Ahmedabad,,Self,,0000000000,,,,2,Parcel,Paid,200.00,,,,,,200.00,,,
 B,WhatsApp Image 2026-11-10 at 22.01.40 (2).jpeg,processed,,,,,,,,,,,,,,,,,,,,,,,,,,,
-B,WhatsApp Image 2026-11-10 at 22.01.40.jpeg,processed,Baba Travels,,,,,,,Ahmedabad,,,,,,,,,Paid,800.00,,,,,,800.00,,,
-B,WhatsApp Image 2026-11-10 at 22.01.41 (1).jpeg,processed,,,P98347,,,,,Ahmedabad,,,,,,,,,Paid,,,,,,,400.00,,,
-B,WhatsApp Image 2026-11-10 at 22.01.41 (2).jpeg,processed,BABA TRAVELS,,P98828,10/03/2025,,,,,Self,,,,,,,S10 ParCeIVELSBABA,,,,,,,,,,,
-B,WhatsApp Image 2026-11-10 at 22.01.41.jpeg,processed,,,,,,,,Ahmedabad,,,,,,,,,,,,,,,,,,,
-B,WhatsApp Image 2026-11-10 at 22.01.42 (3).jpeg,processed,PAWAN TRAVELS,,28625,05/03/2026,11:25AM,INDORE,PUNE,MAYARAM JI8087536777,KLINGELBERG INDIA,27AAECK1993K1Z3,8518888766,VE COMMERCIAL VEHICLES,23AABCE9378F3ZI,8518888766,1,PARCEL-PARCEL,Paid,100,,,0,0,0,100,One Hundred Only,,PAWAN
-B,WhatsApp Image 2026-11-10 at 22.01.54 (2).jpeg,processed,Baba Travels,,,,,,,Ahmedabad,,,,,,0000000,,,,,,,,,,,,,
+B,WhatsApp Image 2026-11-10 at 22.01.40.jpeg,processed,BABA TRAVELS,23AHQPS8492M1ZA,02/2025,,,,Ahmedabad,,,,0000000000,,,0000000000,,,Paid,800.00,,,,,,800.00,,,
+B,WhatsApp Image 2026-11-10 at 22.01.41 (1).jpeg,processed,,23AHQPS8492M1ZA,P98347,,,,Ve Commercial,Ahmedabad,Self,,0000000000,Ve Commercial,,0000000000,4,Parcel,Paid,400.00,,,,,,,,,
+B,WhatsApp Image 2026-11-10 at 22.01.41 (2).jpeg,processed,BABA TRAVELS,,,,,,,,,,,,,,,,,,,,,,,,,,
+B,WhatsApp Image 2026-11-10 at 22.01.41.jpeg,processed,Baba Travels,23AHQPS8492M1ZA,,,,INDORE,Ahmedabad,,Self,,,,,0000000000,5,Parcel,Paid,500.00,,,,,,500.00,,,
+B,WhatsApp Image 2026-11-10 at 22.01.42 (3).jpeg,processed,PAWAN TRAVELS,,28625,05/03/2026,11:25AM,Indore,PUNE,MAYARAM JI8087536777,KLINGELBERG INDIA,27AAECK1993K1Z3,8518888766,VE COMMERCIAL VEHICLES,23AABCE9378F3ZI,8518888766,1,PARCEL-PARCEL,Paid,100,,,0,0,0,100,Rupees One Hundred Only,,PAWAN
+B,WhatsApp Image 2026-11-10 at 22.01.54 (2).jpeg,processed,Baba Travels,,,,,,,,,,,,,,,,,,,,,,,,,,

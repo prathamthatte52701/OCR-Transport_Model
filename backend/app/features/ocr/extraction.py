@@ -256,6 +256,14 @@ def build_extraction_result(parsed: Any, today: date_type | None = None) -> dict
         out[field] = value
         out[f"{field}NeedsReview"] = needs_review
 
+    # Fallback split for "2Parcel"/"4 Parcel"-shaped packageDescription values the AI
+    # left unsplit: a leading count glued to the description is unambiguous and safe
+    # to split deterministically (never invents a count that wasn't already there).
+    if not out["packageCount"]:
+        m = re.match(r"^(\d+)\s*(\D.*)$", out["packageDescription"])
+        if m:
+            out["packageCount"], out["packageDescription"] = m.group(1), m.group(2).strip()
+
     receipt = out["receiptNumber"]
     out["receiptNumberNeedsReview"] = bool(receipt) and RECEIPT_NUMBER_SHAPE_RE.match(receipt) is None
 

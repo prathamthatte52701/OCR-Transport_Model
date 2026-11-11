@@ -427,11 +427,15 @@ def assess_and_preprocess(image_bytes: bytes) -> tuple[bytes, list[str]]:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     if red_page:
-        # Same-hue watermark: a hard adaptive threshold ate real fields (Receipt No,
-        # Delivery At) in testing; min-channel gray alone kept them legible.
-        img = _min_channel_gray(img)
-        steps.append("red_watermark_min_channel")
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # ponytail: measured regression - min-channel gray on a real Baba Travels photo
+        # (not just the synthetic test fixture) made the PaddleOCR text dramatically
+        # WORSE than leaving the original color crop untouched (verified: raw OCR read
+        # "Receipt No.", "GSTNo.-23AHQPS8492M1ZA" and other real fields cleanly; the
+        # min-channel-gray version read almost nothing but watermark fragments). Leaving
+        # the red-ink page as-is for OCR until a real fix (e.g. a saturation-based
+        # separation instead of min-channel) is found and verified against real photos,
+        # not just the synthetic fixture this heuristic was tuned on.
+        pass
     elif float(np.median(gray)) > _WHITE_PAPER_MEDIAN and (
         _midtone_fraction(gray) > _WATERMARK_MIDTONE_FRACTION
     ):

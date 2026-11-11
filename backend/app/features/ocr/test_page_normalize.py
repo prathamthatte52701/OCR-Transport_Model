@@ -54,16 +54,18 @@ def test_full_bleed_scan_is_returned_untouched() -> None:
     assert out is data  # byte-identical: a scan must never be re-encoded or altered
 
 
-def test_page_with_background_is_cropped_to_the_paper() -> None:
+def test_page_with_background_is_left_untouched() -> None:
+    """find_paper can still detect a paper boundary, but normalize_photo no longer
+    acts on it: cropping to that boundary is disabled for full-page OCR (see
+    normalize_photo's docstring) since a wrong guess now destroys real content
+    instead of just missing a header. An upright, non-sideways photo with
+    background is returned byte-identical."""
     data = _png(_on_background(_page()))
     found = find_paper(_decode(data))
-    assert found is not None and found[1] < 0.88
+    assert found is not None and found[1] < 0.88  # detection itself still works
     out, steps = normalize_photo(data, lambda _png: (0, 0.99))
-    assert ORIENT_PAPER_STEP in steps
-    page = _decode(out)
-    # Portrait page out, and far less dark background than we put in
-    assert page.shape[0] > page.shape[1]
-    assert page.mean() > 150
+    assert ORIENT_PAPER_STEP not in steps
+    assert steps == [] and out is data
 
 
 def test_sideways_photo_is_rotated_upright_when_classifier_is_sure() -> None:
@@ -99,10 +101,10 @@ def test_garbage_bytes_fail_open() -> None:
 
 
 def test_classifier_exception_fails_open() -> None:
-    data = _png(_on_background(_page()))
+    sideways = _png(cv2.rotate(_on_background(_page()), cv2.ROTATE_90_CLOCKWISE))
 
     def boom(_png: bytes) -> tuple[int, float]:
         raise RuntimeError("model down")
 
-    out, steps = normalize_photo(data, boom)
-    assert out is data and steps == []
+    out, steps = normalize_photo(sideways, boom)
+    assert out is sideways and steps == []
