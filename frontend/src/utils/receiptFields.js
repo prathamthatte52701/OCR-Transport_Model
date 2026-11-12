@@ -36,7 +36,7 @@ export const RECEIPT_FIELDS = [
 const STATE_KEYS = RECEIPT_FIELDS.flatMap(({ key }) => [key, `${key}NeedsReview`, `${key}AutoCorrected`])
 
 export function pickReceipt(doc) {
-  return Object.fromEntries(STATE_KEYS.map((k) => [k, doc[k]]))
+  return { ...Object.fromEntries(STATE_KEYS.map((k) => [k, doc[k]])), warnings: doc.warnings }
 }
 
 // [{key,label,core,value,needsReview}] for a document (or bulk row); blank optional fields dropped.

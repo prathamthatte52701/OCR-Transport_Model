@@ -490,6 +490,13 @@ export default function UploadPage() {
 
                     {reviewItem.status === 'done' ? (
                       <div className="space-y-2">
+                        {reviewItem.warnings?.length > 0 && (
+                          <div className="rounded-xl border border-amber-800/50 bg-amber-900/15 p-4">
+                            {[...new Set(reviewItem.warnings.map((w) => w.message))].map((m) => (
+                              <p key={m} className="text-[14.7px] text-amber-300/90">{m}</p>
+                            ))}
+                          </div>
+                        )}
                         {receiptFieldsFor(reviewItem).map((f) => {
                           return (
                             <div key={f.key} className={`flex items-center justify-between gap-3 rounded-xl border bg-white/[0.03] px-4 py-3 border-white/10`}>

@@ -41,6 +41,7 @@ from app.features.documents.correction_rules import (
 )
 from app.features.documents.gridfs_service import delete_file
 from app.features.documents.schemas import CorrectRequest
+from app.features.documents.warnings import compute_warnings
 from app.features.ocr.pipeline import ocr_engine_status, ocr_lock_status
 
 router = APIRouter()
@@ -84,6 +85,12 @@ def _serialize_document(doc: dict, owner: dict | None = None) -> dict:
     out["userId"] = str(out["userId"])
     if out.get("gridFsFileId"):
         out["gridFsFileId"] = str(out["gridFsFileId"])
+    warnings = compute_warnings(doc)
+    if doc.get("isDuplicate"):
+        warnings.append(
+            {"field": "receiptNumber", "message": "Possible duplicate: same operator, receipt number and date already exist"}
+        )
+    out["warnings"] = warnings
     if owner:
         out["owner"] = {
             "id": str(owner["_id"]),

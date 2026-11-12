@@ -55,6 +55,7 @@ export default function DocumentCard({ doc, serialNumber }) {
         </p>
       </div>
       {numberNotRead(doc) && <p className="relative mt-2 text-[12.6px] text-amber-400">Number not read</p>}
+      {doc.warnings?.length > 0 && <p className="relative mt-2 text-[12.6px] text-amber-400">Needs attention</p>}
 
       <div className="relative mt-4 grid gap-3">
         <Link

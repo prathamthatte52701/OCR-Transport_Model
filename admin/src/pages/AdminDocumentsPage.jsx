@@ -211,6 +211,11 @@ export default function AdminDocumentsPage() {
                       <span>{docNumber(d)}</span>
                       {d.filePurged && <Badge tone="amber">File removed</Badge>}
                     </div>
+                    {d.warnings?.length > 0 && (
+                      <div className="mt-2 whitespace-normal rounded-xl border border-amber-800/50 bg-amber-900/15 p-2 text-[12.6px] text-amber-300">
+                        {[...new Set(d.warnings.map((w) => w.message))].map((m) => <p key={m}>{m}</p>)}
+                      </div>
+                    )}
                   </td>
                   <td className="whitespace-nowrap text-[var(--muted)]">{d.date || '-'}</td>
                   <td>

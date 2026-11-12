@@ -239,6 +239,13 @@ export default function DocumentDetailPage() {
         <div className="space-y-3">
           <h3 className="mb-2 font-semibold text-gray-300">Extracted Fields</h3>
           {numberNotRead(doc) && <p className="text-[12.6px] text-amber-400">Number not read</p>}
+          {doc.warnings?.length > 0 && (
+            <div className="rounded-xl border border-amber-800/50 bg-amber-900/15 p-4">
+              {[...new Set(doc.warnings.map((w) => w.message))].map((m) => (
+                <p key={m} className="text-[14.7px] text-amber-300/90">{m}</p>
+              ))}
+            </div>
+          )}
           {receiptFieldsFor(doc).map((f) => {
             return (
               <div key={f.key} className={`flex items-center justify-between gap-3 rounded-xl border bg-gray-900 px-4 py-3 border-gray-800`}>
