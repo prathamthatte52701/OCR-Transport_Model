@@ -128,3 +128,25 @@ the honesty note there) predates the toPlace/packageCount/label-leak fixes - so 
 numbers here are a pessimistic lower bound, not a final measurement. No evidence of overfitting
 to specific tuned images: the Pawan result is consistent with other Pawan receipts, and the two
 Baba results are consistent with the overall Baba accuracy level reported above, not worse.
+
+## Limits of this test (2.5 / T3)
+
+Read this before trusting the headline numbers as "how good this is in general":
+
+- **The dataset is narrow.** 18 unique receipts = 15 Baba Travels photos from ONE operator's
+  layout + 3 Pawan Travels photos from ONE sender. The prompt was tuned by looking at these same
+  18 receipts. Every number above measures fit to this one small, specific set - not
+  generalization to a receipt the prompt has never influenced.
+- **The "unseen" check above is not a real holdout.** One of its three receipts (Pawan GR 28625)
+  is the duplicate photo of a receipt that WAS already in the tuned ground-truth set, just shown
+  under a different filename - so it was not actually unseen.
+- **Images are not in this repository.** `testing data/` is git-ignored (by design, since the
+  photos are real third-party receipts), so nobody else can reproduce these exact runs from this
+  repo alone - only the ground truth and results CSVs are checked in.
+- **False values are now measured separately** (see `spec/score.py`'s `false_values` metric,
+  added this loop) - the strict/lenient percentages above do NOT include invented values on
+  blank-truth fields; check the `false_values` block in any score.py run for that signal.
+- **What to do about it**: see `spec/HOLDOUT.md` - at least 10 new, never-tuned-on receipts from
+  other operators/senders are needed before these numbers can be called a real accuracy measure
+  rather than a fit-to-this-sample measure. That holdout run has NOT been done as of this report;
+  no holdout number is estimated or guessed here.
