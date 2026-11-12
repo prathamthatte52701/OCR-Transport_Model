@@ -22,7 +22,7 @@ def _routes_with_env(enable_docs: str | None) -> list[str]:
     )
     env = {
         **__import__("os").environ,
-        "MONGO_DB_NAME": "ackn_AI_model_test",
+        "MONGO_DB_NAME": "docintel_transport_test",
         "PYTHONPATH": str(BACKEND),
     }
     env.pop("ENABLE_DOCS", None)

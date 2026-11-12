@@ -15,7 +15,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-SESSION_TEST_DB = os.environ.get("ACKN_TEST_DB", "ackn_AI_model_test")
+SESSION_TEST_DB = os.environ.get("TRANSPORT_TEST_DB", "docintel_transport_test")
 os.environ["MONGO_DB_NAME"] = SESSION_TEST_DB
 # Test-only signing secret: lets a pre-generated token fixture (made with the old
 # python-jose) be verified forever, and never involves the real secret.
@@ -46,7 +46,7 @@ def safe_to_drop(name: Any, real_name: Any) -> bool:
         return False
     if not re.fullmatch(r"[A-Za-z0-9_]+", name) or not name.endswith("_test") or name == "_test":
         return False
-    if not name.startswith("ackn_"):  # only this project's own test databases, never another app's
+    if not name.startswith("docintel_transport_"):  # only this project's own test databases, never another app's
         return False
     return name.lower() not in _NEVER_DROP and name.lower() != real_name.lower()
 
