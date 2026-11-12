@@ -112,3 +112,10 @@ Checklist of every feature. Tick after commit. Re-read this + spec at start of e
 - Ran: pytest on test_extraction.py, test_amount_review.py, test_code_checks.py only (58 passed). Not run: full ocr folder, backend suite, real-image accuracy re-run.
 - Open: documents/correction.py NEEDS_REVIEW_FIELDS does not include amount fields, so a manual correction will not clear the new amount NeedsReview flags (test_processing_identity CLEARS may want amounts too). Frontend receiptFields.js STATE_KEYS already includes NeedsReview keys generically; no UI shows them yet. Not touched (outside this track file scope).
   **FIXED by coordinator post-merge** - see entry below.
+
+### Wave 2 Task 2 (2026-11-13) - edit works on every document screen (real browser, Playwright)
+- Edit availability: user DocumentDetailPage (CorrectionModal via useCorrectDocument), user UploadPage bulk review card (same CorrectionModal, own mutation), admin AdminDocumentsPage (EditDocumentModal, all 27 fields). DocumentCard / DocumentList / Dashboard recent rows / Documents search results are link-only to the detail page (by design, not changed). AdminUserDetailPage documents table is a read-only list (not changed, never meant to edit inline).
+- Gap found + fixed (856fcc7): admin EditDocumentModal showed its error banner at the bottom of a 27-field modal, off-screen, so an invalid date looked like nothing happened. Error now shown inline under the field (text/logic only, no restyle).
+- Browser-verified: edit updates DOM without reload (detail, upload review, admin); invalid date -> 400 + visible message (user detail, upload review, admin after fix); clearing Date -> "Date missing" warning on detail; admin edit (consignor, cleared date) visible in user app for same doc. No unexpected 4xx/5xx; only the deliberate invalid-date 400s.
+- Not verified: needs-review list filter after clearing (count seen, no per-row check); admin table row refresh behind the modal (modal covers it); admin success banner is behind the modal overlay (pre-existing, not changed).
+- Cleanup: zz_tr_u1 user, 3 documents, 3 GridFS files, 6 corrections, 17 audit logs deleted by id; zero leftovers confirmed.
