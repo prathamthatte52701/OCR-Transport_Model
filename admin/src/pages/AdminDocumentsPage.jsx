@@ -47,15 +47,18 @@ function EditDocumentModal({ doc, onClose, onSaved }) {
   const [values, setValues] = useState(() => Object.fromEntries(fields.map((f) => [f.key, doc[f.key] || ''])))
   const [savingField, setSavingField] = useState(null)
   const [error, setError] = useState('')
+  const [errorKey, setErrorKey] = useState(null) // field the error belongs to, shown inline (modal is long; a bottom banner is off-screen)
 
   async function saveField(key) {
     setError('')
+    setErrorKey(null)
     setSavingField(key)
     try {
       const res = await api.patch(`/admin/documents/${doc._id}`, { field: key, value: values[key].trim() })
       onSaved(res.data.document, `${key} updated.`)
     } catch (err) {
       setError(err.userMessage || 'Could not save field.')
+      setErrorKey(key)
     } finally {
       setSavingField(null)
     }
@@ -87,6 +90,7 @@ function EditDocumentModal({ doc, onClose, onSaved }) {
                 {savingField === f.key ? 'Saving...' : 'Save'}
               </button>
             </div>
+            {errorKey === f.key && error && <p role="alert" className="mt-1 text-[13px] text-rose-300">{error}</p>}
           </div>
         ))}
       </div>
