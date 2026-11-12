@@ -129,7 +129,7 @@ export default function AppLayout() {
               </span>
               <span className="hidden min-w-0 leading-tight sm:block">
                 <span className="block text-base font-bold tracking-tight">Transport OCR</span>
-                <span className="block truncate text-[10.5px] font-medium uppercase tracking-[0.22em] text-slate-500">Acknowledgement Command Center</span>
+                <span className="block truncate text-[10.5px] font-medium uppercase tracking-[0.22em] text-slate-500">Transport Receipt Command Center</span>
               </span>
             </NavLink>
           </div>

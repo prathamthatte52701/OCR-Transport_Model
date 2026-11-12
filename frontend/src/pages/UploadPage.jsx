@@ -30,12 +30,12 @@ function LogisticsUploadIllustration() {
     <div className="relative mt-10 hidden min-h-[310px] overflow-hidden rounded-[30px] border border-blue-300/10 bg-slate-950/20 lg:block">
       <img
         src={challanRouteVisual}
-        alt="Acknowledgement upload visual"
+        alt="Transport receipt upload visual"
         className="absolute inset-0 h-full w-full object-cover object-center"
       />
       <div className="absolute inset-0 bg-gradient-to-t from-slate-950/55 via-transparent to-slate-950/10" />
       <div className="absolute left-5 top-5 rounded-full border border-blue-300/20 bg-blue-500/12 px-4 py-2 text-[10.5px] font-bold uppercase tracking-[0.18em] text-blue-100 backdrop-blur-xl">
-        Acknowledgement Intake
+        Transport Receipt Intake
       </div>
     </div>
   )
