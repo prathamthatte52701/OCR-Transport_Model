@@ -97,7 +97,7 @@ function HeroIllustration() {
     <div className="relative min-h-[270px] overflow-hidden rounded-[28px] border border-blue-300/12 bg-slate-950/40 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
       <img
         src={challanRouteVisual}
-        alt="AI acknowledgement extraction visual"
+        alt="AI receipt extraction visual"
         className="absolute inset-0 h-full w-full object-cover object-center"
       />
       <div className="absolute inset-0 bg-gradient-to-r from-slate-950/15 via-transparent to-slate-950/30" />
@@ -338,7 +338,7 @@ export default function Dashboard() {
                 ) : (
                   <div className="rounded-2xl border border-dashed border-blue-300/14 bg-white/[0.025] px-5 py-10 text-center">
                     <p className="text-[14.7px] font-bold text-slate-300">No documents uploaded yet.</p>
-                    <p className="mt-2 text-[14.7px] text-slate-500">Upload an acknowledgement to see recent document activity here.</p>
+                    <p className="mt-2 text-[14.7px] text-slate-500">Upload a receipt to see recent document activity here.</p>
                   </div>
                 )}
               </div>

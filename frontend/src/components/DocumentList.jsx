@@ -11,7 +11,7 @@ export default function DocumentList({ documents, startIndex = 0 }) {
         </div>
         <h2 className="mt-5 text-2xl font-black text-white">No documents yet</h2>
         <p className="mx-auto mt-2 max-w-md text-[14.7px] leading-6 text-slate-500">
-          Upload your first acknowledgement to start extracting the document number and date.
+          Upload your first receipt to start extracting the receipt number and date.
         </p>
         <Link
           to="/upload"
