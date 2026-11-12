@@ -50,10 +50,9 @@ function EditDocumentModal({ doc, onClose, onSaved }) {
 
   async function saveField(key) {
     setError('')
-    if (!values[key] || !values[key].trim()) { setError('Please enter a value before saving.'); return }
     setSavingField(key)
     try {
-      const res = await api.patch(`/admin/documents/${doc._id}`, { field: key, value: values[key] })
+      const res = await api.patch(`/admin/documents/${doc._id}`, { field: key, value: values[key].trim() })
       onSaved(res.data.document, `${key} updated.`)
     } catch (err) {
       setError(err.userMessage || 'Could not save field.')
@@ -77,6 +76,7 @@ function EditDocumentModal({ doc, onClose, onSaved }) {
                 value={values[f.key]}
                 onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
                 onKeyDown={(e) => e.key === 'Enter' && saveField(f.key)}
+                maxLength={300}
                 className="input"
               />
               <button

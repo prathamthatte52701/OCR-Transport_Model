@@ -1,5 +1,5 @@
 // Single source of truth for the Transport receipt fields (matches backend extraction.py).
-// `core` fields always render ("Not available" when blank); the rest are hidden when blank.
+// `core` fields always render ("Not available" when blank); list/table views hide blank optional ones.
 const F = (key, label, core = false) => ({ key, label, core })
 
 export const RECEIPT_FIELDS = [
@@ -39,9 +39,8 @@ export function pickReceipt(doc) {
   return { ...Object.fromEntries(STATE_KEYS.map((k) => [k, doc[k]])), warnings: doc.warnings }
 }
 
-// [{key,label,core,value,needsReview}] for a document (or bulk row); blank optional fields dropped.
+// [{key,label,core,value,needsReview}] for a document (or bulk row); all 27 fields, blanks included (detail/review views only).
 export function receiptFieldsFor(doc) {
   return RECEIPT_FIELDS
     .map(({ key, label, core }) => ({ key, label, core, value: doc[key], needsReview: !!doc[`${key}NeedsReview`] }))
-    .filter((f) => f.core || String(f.value ?? '').trim())
 }
