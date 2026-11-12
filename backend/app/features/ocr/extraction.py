@@ -116,11 +116,17 @@ def _corrected_date(raw_date: str | None) -> tuple[str, bool]:
 
 
 def correct_amount_format(value: str | None) -> tuple[str, bool]:
-    """Digit-only field (money amounts, package count): strip commas/currency noise, then run
+    corrected, auto, _ = _clean_amount(value)
+    return corrected, auto
+
+
+def _clean_amount(value: str | None) -> tuple[str, bool, bool]:
+    """Returns (value, auto_corrected, needs_review); needs_review is True only when letters
+    were turned into digits. Digit-only field (money amounts, package count): strip commas/currency noise, then run
     the confusion map. Returns (possibly-corrected value, was_auto_corrected). On failure to
     reach a clean plain-number shape, returns the trimmed ORIGINAL text unchanged."""
     if not value or not isinstance(value, str):
-        return "", False
+        return "", False, False
     # Only strip thousands separators/currency marks/trailing "/-"/"Only" noise, never digits
     # or the decimal point.
     cleaned = value.strip()
@@ -129,15 +135,17 @@ def correct_amount_format(value: str | None) -> tuple[str, bool]:
     cleaned = re.sub(r"[,]", "", cleaned)
     cleaned = cleaned.strip().rstrip("/-").strip()
     if not cleaned:
-        return "", False
+        return "", False, False
     if AMOUNT_RE.match(cleaned):
-        return cleaned, cleaned != value.strip()
+        return cleaned, cleaned != value.strip(), False
     chars = list(cleaned)
-    changed = _apply_confusion_map(chars, allowed={"."})
+    _apply_confusion_map(chars, allowed={"."})
     corrected = "".join(chars)
     if AMOUNT_RE.match(corrected):
-        return corrected, True
-    return value.strip()[:_MAX_FIELD_LENGTH], False
+        # Letters were turned into digits. If no digit was ever printed, the value is pure
+        # invention ("OD" -> "00"): drop it, still flagged so a human looks.
+        return (corrected if any(c.isdigit() for c in cleaned) else ""), True, True
+    return value.strip()[:_MAX_FIELD_LENGTH], False, False
 
 
 def normalize_gstin(value: str | None) -> tuple[str, bool]:
@@ -241,6 +249,7 @@ EXTRACTION_FLAG_FIELDS = (
     "consignorPhoneNeedsReview",
     "consigneePhoneNeedsReview",
     *(f"{f}AutoCorrected" for f in _AMOUNT_FIELDS),
+    *(f"{f}NeedsReview" for f in _AMOUNT_FIELDS),
 )
 EXTRACTION_DERIVED_FIELDS = (
     *EXTRACTION_VALUE_FIELDS,
@@ -271,9 +280,12 @@ def build_extraction_result(parsed: Any, today: date_type | None = None) -> dict
         out["dateNeedsReview"] = bool(date)  # non-empty but unparseable -> flag for review
 
     for field in _AMOUNT_FIELDS:
-        corrected, auto = correct_amount_format(out[field])
+        corrected, auto, review = _clean_amount(out[field])
         out[field] = corrected
         out[f"{field}AutoCorrected"] = auto
+        # Letters-to-digits substitution is a guess, not a read: always ask for review.
+        # (Plain cleanup like "Rs. 500" or "500/-" is AutoCorrected but not NeedsReview.)
+        out[f"{field}NeedsReview"] = review
 
     for field in _GSTIN_FIELDS:
         value, needs_review = normalize_gstin(out[field])
