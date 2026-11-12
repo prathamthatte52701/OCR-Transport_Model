@@ -161,3 +161,39 @@ async def test_wrong_type_small_file_still_gets_normal_validation_error(
         data={"documentType": "Tax Invoice"},
     )
     assert r.status_code == 400 and "JPG" in r.json()["detail"]
+
+
+async def _run(method: str, headers: list[tuple[bytes, bytes]], limit: int = 100) -> tuple[list[Any], int]:
+    sent: list[Any] = []
+    reached = 0
+
+    async def app(scope: Any, receive: Any, send: Any) -> None:
+        nonlocal reached
+        reached += 1
+
+    async def receive() -> Any:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Any) -> None:
+        sent.append(message)
+
+    mw = UploadSizeLimitMiddleware(app, {"/up": limit})
+    await mw({"type": "http", "method": method, "path": "/up", "headers": headers}, receive, send)
+    return sent, reached
+
+
+async def test_patch_oversized_content_length_rejected() -> None:
+    sent, reached = await _run("PATCH", [(b"content-length", b"999999")])
+    assert reached == 0 and sent[0]["status"] == 413
+
+
+@pytest.mark.parametrize("bad", [b"-1", b"-99999999999999999999", b"abc", b"", b"1.5"])
+async def test_malformed_content_length_rejected(bad: bytes) -> None:
+    sent, reached = await _run("POST", [(b"content-length", bad)])
+    assert reached == 0 and sent[0]["status"] == 413
+
+
+@pytest.mark.parametrize("headers", [[], [(b"content-length", b"0")], [(b"content-length", b"50")]])
+async def test_zero_missing_and_small_content_length_pass(headers: list[tuple[bytes, bytes]]) -> None:
+    sent, reached = await _run("POST", headers)
+    assert reached == 1 and not sent

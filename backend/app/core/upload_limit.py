@@ -39,7 +39,7 @@ class UploadSizeLimitMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         limit = self.limits.get(scope.get("path", "")) if scope["type"] == "http" else None
-        if limit is None or scope.get("method") != "POST":
+        if limit is None or scope.get("method") not in ("POST", "PATCH"):
             await self.app(scope, receive, send)
             return
 
@@ -47,7 +47,8 @@ class UploadSizeLimitMiddleware:
         declared = dict(scope["headers"]).get(b"content-length")
         if declared is not None:
             try:
-                too_big = int(declared) > limit
+                size = int(declared)
+                too_big = size > limit or size < 0  # negative length is malformed
             except ValueError:
                 too_big = True
             if too_big:
