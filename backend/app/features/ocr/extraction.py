@@ -287,6 +287,22 @@ def build_extraction_result(parsed: Any, today: date_type | None = None) -> dict
         # (Plain cleanup like "Rs. 500" or "500/-" is AutoCorrected but not NeedsReview.)
         out[f"{field}NeedsReview"] = review
 
+    # Baba-only rules (Baba has no separate delivery address, and a lone "Amount" gets copied
+    # into both totalAmount and freight). Only fires when operatorName clearly says Baba.
+    # ponytail: raw OCR text is not available here, so rule 5 can't check for a "Fright" label;
+    # it clears freight whenever it equals totalAmount on a Baba receipt.
+    if "baba" in out["operatorName"].lower():
+        if out["deliveryAddress"].strip().lower() == out["toPlace"].strip().lower():
+            out["deliveryAddress"] = ""
+        if out["freight"] and out["freight"] == out["totalAmount"]:
+            out["freight"] = ""
+
+    # A lone freight with no total and no other charge/tax: the total is probably missed.
+    if out["freight"] and not any(
+        out[f] for f in ("totalAmount", "deliveryCharge", "demurrage", "sgst", "cgst", "igst")
+    ):
+        out["totalAmountNeedsReview"] = True
+
     for field in _GSTIN_FIELDS:
         value, needs_review = normalize_gstin(out[field])
         out[field] = value
