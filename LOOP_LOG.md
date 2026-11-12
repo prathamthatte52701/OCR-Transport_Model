@@ -99,3 +99,9 @@ Checklist of every feature. Tick after commit. Re-read this + spec at start of e
 - That image: profile says needed +0.75 before, -1.0 after -> estimator (minAreaRect over Otsu ink) overshot/wrong direction, confirming the earlier audit.
 - OCR ON vs OFF (that one image): key money fields identical (Amount:140.00, Fright:0.00, Delivery:140.00, 14Parcel). ON gained `GSTNo.-23AHQPS8492M1ZA` (absent OFF); ON misread header "BABA TRAVELS" as "BABATRAVES". Receipt no./date missing in both. Not measurably worse; mixed-to-slightly-better.
 - Decision: NO code change (user rule: change only if proven worse). Inconclusive on estimator quality: N=1 firing image; the angle estimate is demonstrably inaccurate but the OCR effect is neutral. Not verified: any effect on non-Baba/Pawan-style scans (none in test set fired).
+### 2026-11-13 Track A, Task 1: admin correction did not refresh isDuplicate
+- Gap was real: user route called refresh_duplicate_flag itself after operatorName/receiptNumber/date edits; admin PATCH /admin/documents/{id} never did. NeedsReview resets were already shared (correction_set_fields via apply_correction) and fine.
+- Fix: refresh moved into shared correction_rules.apply_correction (uses the OWNER userId, not the editor); removed the user-route special case and its unused import. duplicate.py already excludes the doc via _id $ne and never flags blank fields - unchanged.
+- Tests: new documents/test_correction_refresh.py (both routes: fix dup, create dup, clear receiptNumber/date/totalAmount appears in needsReview=true, user==admin state, repeat edits, unrelated field, blank receipts never duplicate). Pre-fix run (with -x) showed the admin test failing; the other cases were not run pre-fix (not verified individually).
+- Ran: test_correction_refresh + test_duplicate + test_correction_integrity = 39 passed. Full suite not run (Task 5).
+- Open: none known.
