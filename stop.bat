@@ -6,11 +6,11 @@ set "RC=0"
 set "FOUND=0"
 
 call :stopone backend 2000 "Transport Backend"
-call :stopone user 5174 "ACKN User App"
-call :stopone admin 5175 "ACKN Admin App"
+call :stopone user 3000 "Transport User App"
+call :stopone admin 4000 "Transport Admin App"
 
 set "LEFT="
-for %%p in (2000 5174 5175) do call :chk %%p
+for %%p in (2000 3000 4000) do call :chk %%p
 if "%FOUND%"=="0" (
   echo Nothing was running.
 ) else (

@@ -54,8 +54,8 @@ set "LIVE=0"
 set "UP=0"
 set "BUSY="
 call :probe backend 2000 "Transport Backend"
-call :probe user 5174 "ACKN User App"
-call :probe admin 5175 "ACKN Admin App"
+call :probe user 3000 "Transport User App"
+call :probe admin 4000 "Transport Admin App"
 
 if "%UP%"=="3" (
   echo Already running.
@@ -80,11 +80,11 @@ rem PCs it needs 20 seconds just to start.
 start "Transport Backend" /min /d "%ROOT%backend" cmd /s /c ""%PY%" -m uvicorn app.main:app --host 127.0.0.1 --port 2000"
 call :recordpid backend "Transport Backend"
 if errorlevel 1 goto launchfail
-start "ACKN User App" /min /d "%ROOT%frontend" cmd /s /c ""%NODE%" "%ROOT%frontend\node_modules\vite\bin\vite.js" preview --port 5174 --strictPort --host 127.0.0.1"
-call :recordpid user "ACKN User App"
+start "Transport User App" /min /d "%ROOT%frontend" cmd /s /c ""%NODE%" "%ROOT%frontend\node_modules\vite\bin\vite.js" preview --port 3000 --strictPort --host 127.0.0.1"
+call :recordpid user "Transport User App"
 if errorlevel 1 goto launchfail
-start "ACKN Admin App" /min /d "%ROOT%admin" cmd /s /c ""%NODE%" "%ROOT%admin\node_modules\vite\bin\vite.js" preview --port 5175 --strictPort --host 127.0.0.1"
-call :recordpid admin "ACKN Admin App"
+start "Transport Admin App" /min /d "%ROOT%admin" cmd /s /c ""%NODE%" "%ROOT%admin\node_modules\vite\bin\vite.js" preview --port 4000 --strictPort --host 127.0.0.1"
+call :recordpid admin "Transport Admin App"
 if errorlevel 1 goto launchfail
 
 echo Starting, please wait (the first start can take a minute)...
@@ -117,11 +117,11 @@ set "RC=1"
 goto done
 
 :up
-start "" "http://localhost:5174"
+start "" "http://localhost:3000"
 :urls
 echo.
-echo User app : http://localhost:5174
-echo Admin app: http://localhost:5175
+echo User app : http://localhost:3000
+echo Admin app: http://localhost:4000
 echo Stop with stop.bat
 goto done
 
