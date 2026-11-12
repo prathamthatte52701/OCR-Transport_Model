@@ -1,4 +1,6 @@
-"""Runs PaddleOCR against a header-crop image.
+"""Runs PaddleOCR against the full receipt page image (crop_header is a pass-through at
+FULL_PAGE_RATIO = 1.0 for Transport - see page_normalize.py - unlike ACKN's header-only crop this
+module's docstrings below were originally written for).
 
 Was previously spawning a fresh child process - and re-instantiating
 PaddleOCR (full model load from disk) - on every single call. Model init for
