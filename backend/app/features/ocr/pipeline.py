@@ -294,7 +294,6 @@ async def _classify_under_lock(png: bytes) -> tuple[int, float]:
 async def _extract_header_text(buffer: bytes, mime_type: str) -> str | None:
     """Returns the full-page OCR/text-layer text, or None on failure - receipt fields run
     across the whole page, unlike ACKN's header-only crop."""
-    cut_from_background = False
     try:
         if mime_type == "application/pdf":
             text, page_png = await get_pdf_header_text_or_image(buffer)
@@ -310,19 +309,16 @@ async def _extract_header_text(buffer: bytes, mime_type: str) -> str | None:
             # under the same lock as OCR; the lock is released before the
             # OCR block below re-acquires it.
             page_bytes = await _normalize_photo_page(buffer)
-            cut_from_background = page_bytes != buffer
             image_bytes = crop_left_copy(crop_header(page_bytes))  # full page; two-copy slip keeps left copy
 
         # Feature 6: quality-gated preprocessing on the header crop itself -
         # skips straight through (unmodified bytes) when the crop is already
         # good quality. See preprocessing.py's module-level docstring for the
         # scope boundaries (header-only, not full-page rotation recovery).
-        # Photos cut out of a background are small and soft; the binarizing steps
-        # turned digits into noise (8<->0, 3<->6, 2026 -> 2028), so raw is better.
-        if mime_type != "application/pdf" and cut_from_background:
-            preprocess_steps: list[str] = []
-        else:
-            image_bytes, preprocess_steps = assess_and_preprocess(image_bytes)
+        # Always runs, rotated or not: it is quality-gated and leaves good images alone. (A skip
+        # for "page_bytes != buffer" dated from the paper-crop step, now disabled; the flag had
+        # silently turned into "was rotated" and starved rotated photos of preprocessing.)
+        image_bytes, preprocess_steps = assess_and_preprocess(image_bytes)
         if preprocess_steps:
             logger.info(f"OCR preprocessing steps triggered: {preprocess_steps}")
         use_doc_orientation_classify = ORIENTATION_CHECK_STEP in preprocess_steps
