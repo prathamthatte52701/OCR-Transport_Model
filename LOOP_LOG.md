@@ -90,3 +90,12 @@ Checklist of every feature. Tick after commit. Re-read this + spec at start of e
 
 ### Loop 5 — Docs + final proof
 - Not started.
+
+## Strict Loop
+
+### 2026-11-13 - Track C: deskew measurement on all 20 real photos (no code change)
+- Method: normalize_photo (real Paddle orientation classifier) -> crop_header -> crop_left_copy -> `_deskew`, per image. "True" tilt = projection-profile variance search (adaptive-threshold ink mask, -6..+6 deg in 0.25 steps, cv2 ccw-positive); noisy on watermarked Baba pages, indicative only.
+- Deskew fired on 1 of 20 (the 22.01.34 Baba photo, computed 1.72 deg). Other 19: 0 or <0.5 deg (no rotation applied).
+- That image: profile says needed +0.75 before, -1.0 after -> estimator (minAreaRect over Otsu ink) overshot/wrong direction, confirming the earlier audit.
+- OCR ON vs OFF (that one image): key money fields identical (Amount:140.00, Fright:0.00, Delivery:140.00, 14Parcel). ON gained `GSTNo.-23AHQPS8492M1ZA` (absent OFF); ON misread header "BABA TRAVELS" as "BABATRAVES". Receipt no./date missing in both. Not measurably worse; mixed-to-slightly-better.
+- Decision: NO code change (user rule: change only if proven worse). Inconclusive on estimator quality: N=1 firing image; the angle estimate is demonstrably inaccurate but the OCR effect is neutral. Not verified: any effect on non-Baba/Pawan-style scans (none in test set fired).
