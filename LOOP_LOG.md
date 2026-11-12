@@ -105,3 +105,10 @@ Checklist of every feature. Tick after commit. Re-read this + spec at start of e
 - Tests: new documents/test_correction_refresh.py (both routes: fix dup, create dup, clear receiptNumber/date/totalAmount appears in needsReview=true, user==admin state, repeat edits, unrelated field, blank receipts never duplicate). Pre-fix run (with -x) showed the admin test failing; the other cases were not run pre-fix (not verified individually).
 - Ran: test_correction_refresh + test_duplicate + test_correction_integrity = 39 passed. Full suite not run (Task 5).
 - Open: none known.
+
+### Track B (2026-11-13) - extraction.py deterministic guards
+- Task 3 (bd9d0a0): amount fields now have `<field>NeedsReview` flags (added to EXTRACTION_FLAG_FIELDS, so empty/reset/success helpers pick them up automatically). Letter->digit substitution keeps the value but sets the flag; if the original had no digit at all ("OD", "O", "SOS") the value becomes "" (flag still True). Clean cleanups ("Rs. 500", "500/-", "1,250.50") unchanged, no flag. "N/A" stays "N/A" as before. Before the fix "OD" -> "00" silently.
+- Task 4: GSTIN shape and phone (10 digits / 0000000000) flags were ALREADY correct (verified by tests, no change). New: lone freight with blank total/charges/taxes flags totalAmountNeedsReview; Baba (operatorName contains "baba") deliveryAddress == toPlace is cleared; Baba freight == totalAmount clears freight (simple version: raw OCR text is not passed into build_extraction_result, so the "no Fright label" check is not implemented).
+- Ran: pytest on test_extraction.py, test_amount_review.py, test_code_checks.py only (58 passed). Not run: full ocr folder, backend suite, real-image accuracy re-run.
+- Open: documents/correction.py NEEDS_REVIEW_FIELDS does not include amount fields, so a manual correction will not clear the new amount NeedsReview flags (test_processing_identity CLEARS may want amounts too). Frontend receiptFields.js STATE_KEYS already includes NeedsReview keys generically; no UI shows them yet. Not touched (outside this track file scope).
+  **FIXED by coordinator post-merge** - see entry below.
