@@ -150,3 +150,50 @@ Read this before trusting the headline numbers as "how good this is in general":
   other operators/senders are needed before these numbers can be called a real accuracy measure
   rather than a fit-to-this-sample measure. That holdout run has NOT been done as of this report;
   no holdout number is estimated or guessed here.
+
+## Round 2 (2026-11-12) - Loop 2 item 2.4 re-measurement
+
+Measured through the live API (backend on port 2000, db `docintel_transport`, 7 Groq keys), all 20
+images: Run A one at a time via `/documents/upload`, Run B 4 batches of 5 via `/documents/bulk-upload`.
+All 40 documents reached `processed`. Files: `spec/results_run_a_v2.csv`, `spec/results_run_b_v2.csv`,
+`spec/mismatches_run_a_v2.csv`, `spec/mismatches_run_b_v2.csv`. Test user and all 40 docs, GridFS
+files and audit logs were deleted by exact id afterward (0 remaining).
+
+**Not apples-to-apples:** `score.py` now scores each unique receipt once (duplicate photo pairs no
+longer counted twice), so the denominators dropped (312 -> 276 overall, 213 -> 193 core, 99 -> 83
+optional). Round 1 numbers below are the old double-counted ones; percentages are still the fair
+comparison, but expect some movement from the denominator change alone, not only from the fixes.
+
+| Metric | Round 1 A | Round 2 A | Round 1 B | Round 2 B |
+|---|---|---|---|---|
+| Overall strict | 52.2% | **57.2%** (158/276) | 56.7% | **57.2%** (158/276) |
+| Overall lenient | 56.4% | **60.9%** (168/276) | 60.9% | **60.9%** (168/276) |
+| Core strict | 49.3% | **53.9%** (104/193) | 53.1% | **53.9%** (104/193) |
+| Core lenient | 49.3% | **53.9%** | 53.1% | **53.9%** |
+| Optional strict | 58.6% | **65.1%** (54/83) | 64.6% | **65.1%** (54/83) |
+| Optional lenient | 71.7% | **77.1%** (64/83) | 77.8% | **77.1%** (64/83) |
+| Lenient mismatches | 136 | **108** | 122 | **108** |
+
+Runs A and B tie on the totals by coincidence; 12 result rows differ between them (A better on
+`operator_name`/`receipt_number`/`consignee_name`/`total_amount`, B better on `from_place`/`to_place`).
+
+**Got worse (plainly):** Run B vs Round 1 B overall lenient is flat (60.9 -> 60.9), and Run B optional
+lenient dropped 77.8% -> 77.1%. `delivery_address` stays at 75% lenient (0% strict). `receipt_number`
+(27-33%) and `date` (22%) are still the worst, due to the known PaddleOCR detection limit above.
+
+### Per-field lenient (Round 2 A / B), weakest first
+date 22.2/22.2, prepared_by 25.0/25.0, receipt_number 33.3/27.8, consignee_name 44.4/38.9,
+operator_gstin 53.3/53.3, package_count 55.6/55.6, time 60.0/60.0 (n=5), package_description 61.1/61.1.
+Large gains vs Round 1 (Run A): `package_count` 15% -> 55.6%, `to_place` 35% -> 66.7% (B: 72.2%),
+`package_description` 25% -> 61.1%, `consignee_name` and `operator_gstin` improved. Round 1 `date`
+(25%) is now 22.2% (n changed 20 -> 18, i.e. one fewer hit, within noise).
+
+### False values (new metric, no prior baseline)
+Truth blank but model answered anyway:
+
+| Run | Count | Opportunities | Rate | Top fields |
+|---|---|---|---|---|
+| A | 2 | 210 | 1.0% | from_place 1, remark 1 |
+| B | 2 | 210 | 1.0% | from_place 1, freight 1 |
+
+Invented data is rare; this is the first baseline for it.
