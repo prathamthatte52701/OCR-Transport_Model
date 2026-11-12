@@ -4,14 +4,24 @@ flag (not recomputed on every read like the other warnings) because it needs a d
 query - computed once right after a successful extraction, and refreshed whenever a
 correction changes one of the three fields it depends on."""
 
+import re
 from typing import Any
+
+
+def _exact_ci_regex(value: str) -> re.Pattern:
+    """Case-insensitive, whitespace-collapsed exact match: trims each side, collapses any run
+    of internal whitespace to match any run of whitespace in the stored value (I6 - "BABA
+    TRAVELS" vs "Baba Travels", "P98506" vs "p98506 " must be treated as the same value)."""
+    parts = [re.escape(p) for p in value.strip().split()]
+    return re.compile(r"^\s*" + r"\s+".join(parts) + r"\s*$", re.IGNORECASE)
 
 
 async def check_duplicate(db: Any, user_id: Any, doc_id: Any, doc: dict) -> bool:
     """True when another (non-deleted) document owned by the same user shares the same
-    operatorName + receiptNumber + date. Blank fields never count as a match (an empty
-    receiptNumber on two documents is not a duplicate - it's two documents missing the
-    same field)."""
+    operatorName + receiptNumber + date (operatorName/receiptNumber compared case-insensitively
+    and whitespace-normalised; date is already a normalised DD/MM/YYYY string). Blank fields
+    never count as a match (an empty receiptNumber on two documents is not a duplicate - it's
+    two documents missing the same field)."""
     receipt_number = doc.get("receiptNumber")
     date = doc.get("date")
     operator_name = doc.get("operatorName")
@@ -22,8 +32,8 @@ async def check_duplicate(db: Any, user_id: Any, doc_id: Any, doc: dict) -> bool
             "_id": {"$ne": doc_id},
             "userId": user_id,
             "isDeleted": {"$ne": True},
-            "operatorName": operator_name,
-            "receiptNumber": receipt_number,
+            "operatorName": _exact_ci_regex(operator_name),
+            "receiptNumber": _exact_ci_regex(receipt_number),
             "date": date,
         },
         {"_id": 1},

@@ -61,6 +61,22 @@ async def test_deleted_document_not_counted(db: Any, make_user: Any) -> None:
     assert await check_duplicate(db, u.id, doc_id, doc) is False
 
 
+async def test_duplicate_detected_case_insensitive_operator_name(db: Any, make_user: Any) -> None:
+    u = await make_user()
+    await _insert(db, u.id, operatorName="BABA TRAVELS")
+    doc_id = await _insert(db, u.id, operatorName="Baba Travels")
+    doc = await db.documents.find_one({"_id": doc_id})
+    assert await check_duplicate(db, u.id, doc_id, doc) is True
+
+
+async def test_duplicate_detected_case_insensitive_receipt_number(db: Any, make_user: Any) -> None:
+    u = await make_user()
+    await _insert(db, u.id, receiptNumber="p98506 ")
+    doc_id = await _insert(db, u.id, receiptNumber="P98506")
+    doc = await db.documents.find_one({"_id": doc_id})
+    assert await check_duplicate(db, u.id, doc_id, doc) is True
+
+
 async def test_refresh_duplicate_flag_writes_field(db: Any, make_user: Any) -> None:
     u = await make_user()
     await _insert(db, u.id)
