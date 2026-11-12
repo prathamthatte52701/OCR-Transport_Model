@@ -14,7 +14,7 @@ policy.
 ## What changed
 
 - **Document type**: ACKN's two types (Tax Invoice, Delivery Challan) with 2-4 extracted fields
-  each → Transport's single type (a bus luggage/parcel receipt) with a flat 26-field schema
+  each → Transport's single type (a bus luggage/parcel receipt) with a flat 27-field schema
   covering two different operator layouts (Pawan Travels, Baba Travels). See
   `backend/app/features/ocr/extraction.py` for the field list.
 - **OCR scope**: ACKN OCRs only the top ~30% header crop. Transport OCRs the FULL page, since

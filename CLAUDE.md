@@ -5,7 +5,7 @@ Guidance for Claude Code when working in this repository.
 ## What this is
 
 Transport OCR — reads bus luggage/parcel receipts (photo or PDF page 1) from two operators
-(Pawan Travels, Baba Travels) and extracts a flat 26-field schema (operator, receipt number,
+(Pawan Travels, Baba Travels) and extracts a flat 27-field schema (operator, receipt number,
 date, consignor/consignee, packages, money fields). Per-user auth, manual field correction with
 history, bulk upload (up to 5), admin panel with cross-user CRUD + telemetry. Forked from
 "ACKN OCR Model" (a Tax Invoice/Delivery Challan extractor) — same stack and architecture,
@@ -48,7 +48,7 @@ Both proxy `/api` to the backend on port 2000 (see each app's `vite.config.js`).
 `MONGO_URI` and `JWT_SECRET` (>=32 chars) required, app exits at import time if missing.
 `GROQ_API_KEYS` (comma-separated, round-robined on failure). `GROQ_REASONING_EFFORT` defaults
 to `low` and `GROQ_MAX_TOKENS` to 3000 (ceiling 8000) — deliberately low-reasoning/high-token,
-tuned for a 26-field JSON answer rather than deep disambiguation; don't raise reasoning effort
+tuned for a 27-field JSON answer rather than deep disambiguation; don't raise reasoning effort
 without checking token budget math first (reasoning tokens draw from the same budget as the
 answer). `ADMIN_1_*`/`ADMIN_2_*` seed-only admin identities.
 
