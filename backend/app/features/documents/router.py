@@ -505,8 +505,19 @@ async def list_documents(
             {f: regex} for f in ("receiptNumber", "operatorName", "consignorName", "consigneeName")
         ]
     if needs_review:
+        # I15: any *NeedsReview flag, OR a flagged duplicate, OR a processed document still
+        # missing a core identifying field (receiptNumber/date/totalAmount) - a total-vs-parts
+        # mismatch is computed on read (warnings.py) and is not filterable here.
         filter_query["$and"] = [
-            {"$or": [{f: True} for f in EXTRACTION_FLAG_FIELDS if f.endswith("NeedsReview")]}
+            {
+                "$or": [
+                    *({f: True} for f in EXTRACTION_FLAG_FIELDS if f.endswith("NeedsReview")),
+                    {"isDuplicate": True},
+                    {"receiptNumber": "", "uploadStatus": "processed"},
+                    {"date": "", "uploadStatus": "processed"},
+                    {"totalAmount": "", "uploadStatus": "processed"},
+                ]
+            }
         ]
     if date and date.strip():
         filter_query["date"] = date.strip()
