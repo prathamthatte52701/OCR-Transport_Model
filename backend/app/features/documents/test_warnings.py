@@ -61,6 +61,21 @@ def test_total_vs_freight_delivery_demurrage_mismatch() -> None:
     assert not any("freight" in w["message"] for w in compute_warnings(doc_ok))
 
 
+def test_total_vs_freight_plus_taxes_no_false_warning() -> None:
+    # I2: freight 100 + sgst 2.5 + cgst 2.5 = total 105 -> no mismatch warning.
+    doc_ok = _doc(totalAmount="105", freight="100", sgst="2.5", cgst="2.5")
+    assert not any("freight" in w["message"] for w in compute_warnings(doc_ok))
+    doc_bad = _doc(totalAmount="110", freight="100", sgst="2.5", cgst="2.5")
+    assert any("freight" in w["message"] for w in compute_warnings(doc_bad))
+
+
+def test_total_vs_freight_plus_all_taxes_including_igst() -> None:
+    doc_ok = _doc(totalAmount="118", freight="100", sgst="9", cgst="9", igst="0")
+    assert not any("freight" in w["message"] for w in compute_warnings(doc_ok))
+    doc_pawan = _doc(totalAmount="100", freight="100", sgst="0", cgst="0", igst="0")
+    assert not any("freight" in w["message"] for w in compute_warnings(doc_pawan))
+
+
 def test_total_vs_amount_in_words_mismatch() -> None:
     doc = _doc(totalAmount="200", amountInWords="Rupees Five Hundred Only")
     assert any("amount in words" in w["message"] for w in compute_warnings(doc))

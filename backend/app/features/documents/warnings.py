@@ -100,14 +100,16 @@ def compute_warnings(doc: dict) -> list[dict]:
         if doc.get(field) and doc.get(f"{field}NeedsReview"):
             warnings.append({"field": field, "message": f"{label} looks incomplete"})
 
-    freight = _to_number(doc.get("freight", ""))
-    delivery_charge = _to_number(doc.get("deliveryCharge", ""))
-    demurrage = _to_number(doc.get("demurrage", ""))
+    charge_fields = ("freight", "deliveryCharge", "demurrage", "sgst", "cgst", "igst")
+    charges = [_to_number(doc.get(f, "")) for f in charge_fields]
     total = _to_number(doc.get("totalAmount", ""))
-    parts = [p for p in (freight, delivery_charge, demurrage) if p is not None]
+    parts = [p for p in charges if p is not None]
     if parts and total is not None and not _amounts_match(total, sum(parts)):
         warnings.append(
-            {"field": "totalAmount", "message": "Total does not match freight + delivery + demurrage"}
+            {
+                "field": "totalAmount",
+                "message": "Total does not match freight + delivery + demurrage + taxes",
+            }
         )
 
     words_value = words_to_number(doc.get("amountInWords", ""))
