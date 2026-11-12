@@ -480,7 +480,7 @@ CLEARS = {
     "receiptNumber": ("receiptNumberNeedsReview",),
     "date": ("dateAutoCorrected", "dateNeedsReview"),
     "operatorGstin": ("operatorGstinNeedsReview",),
-    "totalAmount": ("totalAmountAutoCorrected",),
+    "totalAmount": ("totalAmountAutoCorrected", "totalAmountNeedsReview"),
 }
 VALUE_FOR = {
     "receiptNumber": "TR/2526/000999",

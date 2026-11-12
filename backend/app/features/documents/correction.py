@@ -22,6 +22,10 @@ NEEDS_REVIEW_FIELDS = (
     "consigneeGstin",
     "consignorPhone",
     "consigneePhone",
+    # Amount fields gained their own NeedsReview flag this loop (extraction.py's
+    # confusion-map/Baba guards) - a manual correction must clear it too, or a typed-in
+    # value stays stuck flagged forever.
+    *AUTO_CORRECTED_FIELDS[1:],  # packageCount, freight, deliveryCharge, demurrage, sgst, cgst, igst, totalAmount
 )
 
 
