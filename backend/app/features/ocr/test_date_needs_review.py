@@ -21,18 +21,16 @@ TODAY = date(2026, 6, 15)
         ("14/06/2021", True),  # 5 years back - 1 day
         ("16/06/2021", False),
         ("01/01/2027", True),  # future year
-        ("32/13/2026", False),  # unreal -> not flagged
+        ("32/13/2026", True),  # unreal shape -> kept as raw text, flagged for review
         (None, False),
     ],
 )
 def test_flag_in_build_result(value: str | None, expected: bool) -> None:
-    for doc_type, key in (("Tax Invoice", "taxInvoiceNo"), ("Delivery Challan", "number")):
-        r = build_extraction_result(doc_type, {key: "X", "date": value}, today=TODAY)
-        assert r["dateNeedsReview"] is expected
-        if expected:
-            assert r["date"] == value  # value never changed
-    assert empty_extraction_result("Tax Invoice")["dateNeedsReview"] is False
-    assert empty_extraction_result("Delivery Challan")["dateNeedsReview"] is False
+    r = build_extraction_result({"receiptNumber": "X", "date": value}, today=TODAY)
+    assert r["dateNeedsReview"] is expected
+    if value is not None and not ex.normalize_date_to_ddmmyyyy(value):
+        assert r["date"] == value  # raw value never dropped when unparseable
+    assert empty_extraction_result()["dateNeedsReview"] is False
 
 
 def test_flag_in_flag_fields_and_correction() -> None:
@@ -41,4 +39,6 @@ def test_flag_in_flag_fields_and_correction() -> None:
         correction_set_fields("date", "01/01/2099", datetime(2026, 1, 1))["dateNeedsReview"]
         is False
     )
-    assert "dateNeedsReview" not in correction_set_fields("number", "1", datetime(2026, 1, 1))
+    assert "dateNeedsReview" not in correction_set_fields(
+        "receiptNumber", "1", datetime(2026, 1, 1)
+    )

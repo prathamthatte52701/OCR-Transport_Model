@@ -1,6 +1,10 @@
 import json
 import re
 
+
+def _reject_non_finite(name: str) -> float:
+    raise ValueError(f"AI returned non-finite JSON constant: {name}")
+
 _CODE_FENCE_START_RE = re.compile(r"^```json\s*", re.IGNORECASE)
 _CODE_FENCE_START_PLAIN_RE = re.compile(r"^```\s*")
 
@@ -59,7 +63,7 @@ def sanitize_json(text: str) -> str:
 def parse_extraction_json(raw: str) -> dict:
     cleaned = sanitize_json(strip_markdown(raw))
     try:
-        return json.loads(cleaned)
+        return json.loads(cleaned, parse_constant=_reject_non_finite)
     except json.JSONDecodeError:
         # From the first "{" to the last "}" (the span of the old regex \{[\s\S]*\}, found in
         # linear time).
@@ -68,6 +72,6 @@ def parse_extraction_json(raw: str) -> dict:
             raise ValueError("AI returned invalid JSON") from None
         candidate = cleaned[start : last + 1]
         try:
-            return json.loads(candidate)
+            return json.loads(candidate, parse_constant=_reject_non_finite)
         except json.JSONDecodeError:
-            return json.loads(sanitize_json(candidate))
+            return json.loads(sanitize_json(candidate), parse_constant=_reject_non_finite)

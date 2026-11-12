@@ -2,6 +2,8 @@
 Run directly: python -m app.features.ocr.test_extraction"""
 
 from app.features.ocr.extraction import (
+    _clean_text_field,
+    _corrected_date,
     build_extraction_result,
     correct_amount_format,
     correct_date_format,
@@ -106,6 +108,65 @@ def test_empty_result_is_all_blank_and_false() -> None:
             assert value == ""
 
 
+def test_amount_rs_prefix_stripped() -> None:
+    corrected, _ = correct_amount_format("Rs. 500")
+    assert corrected == "500"
+    corrected, _ = correct_amount_format("Rs 500/-")
+    assert corrected == "500"
+
+
+def test_amount_trailing_slash_dash_stripped() -> None:
+    corrected, _ = correct_amount_format("500/-")
+    assert corrected == "500"
+
+
+def test_amount_only_suffix_stripped() -> None:
+    corrected, _ = correct_amount_format("500 Only")
+    assert corrected == "500"
+
+
+def test_amount_rs_with_slash_dash_combo() -> None:
+    corrected, _ = correct_amount_format("Rs.500/- Only")
+    assert corrected == "500"
+
+
+def test_date_single_digit_day_month_accepted() -> None:
+    date, auto = _corrected_date("5/11/2026")
+    assert date == "05/11/2026"
+
+
+def test_date_two_digit_year_accepted() -> None:
+    date, auto = _corrected_date("05/11/26")
+    assert date == "05/11/2026"
+
+
+def test_date_dash_separator_single_digit_accepted() -> None:
+    date, auto = _corrected_date("5-11-2026")
+    assert date == "05/11/2026"
+
+
+def test_date_unparseable_keeps_raw_text_and_flags_review() -> None:
+    result = build_extraction_result({"date": "not a date at all"})
+    assert result["date"] == "not a date at all"
+    assert result["dateNeedsReview"] is True
+
+
+def test_clean_text_field_float_with_decimal_kept() -> None:
+    assert _clean_text_field(500.5, "freight") == "500.5"
+
+
+def test_clean_text_field_whole_float_kept() -> None:
+    assert _clean_text_field(500.0, "freight") == "500"
+
+
+def test_clean_text_field_nan_dropped_not_raised() -> None:
+    assert _clean_text_field(float("nan"), "freight") == ""
+
+
+def test_clean_text_field_infinity_dropped_not_raised() -> None:
+    assert _clean_text_field(float("inf"), "freight") == ""
+
+
 def demo() -> None:
     test_amount_confusion_corrected()
     test_amount_strips_commas_and_currency()
@@ -120,6 +181,18 @@ def demo() -> None:
     test_results_carry_every_value_and_flag_field()
     test_receipt_number_shape_flagged_not_changed()
     test_empty_result_is_all_blank_and_false()
+    test_amount_rs_prefix_stripped()
+    test_amount_trailing_slash_dash_stripped()
+    test_amount_only_suffix_stripped()
+    test_amount_rs_with_slash_dash_combo()
+    test_date_single_digit_day_month_accepted()
+    test_date_two_digit_year_accepted()
+    test_date_dash_separator_single_digit_accepted()
+    test_date_unparseable_keeps_raw_text_and_flags_review()
+    test_clean_text_field_float_with_decimal_kept()
+    test_clean_text_field_whole_float_kept()
+    test_clean_text_field_nan_dropped_not_raised()
+    test_clean_text_field_infinity_dropped_not_raised()
     print("All extraction/correction self-checks passed.")
 
 

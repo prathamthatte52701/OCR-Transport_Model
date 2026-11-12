@@ -7,6 +7,7 @@ distinction does not exist for a receipt, unlike ACKN's "not read yet" vs "confi
 absent"). Core fields are the ones present on most receipts; optional fields are everything
 else. Accuracy reporting always splits core vs optional (spec section 5/15)."""
 
+import math
 import re
 from datetime import date as date_type
 from datetime import datetime
@@ -17,8 +18,12 @@ from loguru import logger
 from app.core.date_window import date_implausible
 from app.core.timezones import now_ist
 
-DATE_RE = re.compile(r"^(\d{2})[./-](\d{2})[./-](\d{4})$")
-DATE_CHARS_RE = re.compile(r"^[\d./-]+$")
+DATE_RE = re.compile(r"^(\d{1,2})[./\-\s](\d{1,2})[./\-\s](\d{2}|\d{4})$")
+DATE_CHARS_RE = re.compile(r"^[\d./\- ]+$")
+_AMOUNT_NOISE_RE = re.compile(r"(?:rs\.?|inr|₹)\s*", re.IGNORECASE)
+_AMOUNT_TRAILING_WORDS_RE = re.compile(r"\b(only)\b\s*", re.IGNORECASE)
+# A two-digit year is only expanded when the result lands in a plausible receipt window.
+_TWO_DIGIT_YEAR_MIN, _TWO_DIGIT_YEAR_MAX = 2000, 2099
 GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")
 PHONE_RE = re.compile(r"^\d{10}$")
 # A receipt number must have at least one letter-or-digit run of reasonable length; this is a
@@ -69,25 +74,35 @@ def correct_date_format(raw_date: str | None) -> tuple[str | None, bool]:
 
 
 def normalize_date_to_ddmmyyyy(raw: str | None) -> str | None:
-    """Never guess: only accepts an already-unambiguous DD/MM/YYYY-shaped value (separator
-    normalized to /). Anything else -> empty string."""
+    """Accepts day/month with 1-2 digits and a 2 or 4 digit year, any of . / - or space as
+    separator. A 2-digit year expands to 20YY only inside the plausible receipt window. Zero-pads
+    day/month on output. Anything that still doesn't resolve to a real calendar date -> None."""
     if not raw or not isinstance(raw, str):
         return None
     match = DATE_RE.match(raw.strip())
     if not match:
         return None
     dd, mm, yyyy = match.groups()
-    d, m, y = int(dd), int(mm), int(yyyy)
-    if not 2000 <= y <= 2100:
-        return None
+    d, m = int(dd), int(mm)
+    if len(yyyy) == 4:
+        y = int(yyyy)
+        if not 2000 <= y <= 2100:
+            return None
+    else:
+        y = 2000 + int(yyyy)
+        if not _TWO_DIGIT_YEAR_MIN <= y <= _TWO_DIGIT_YEAR_MAX:
+            return None
     try:
         datetime(y, m, d)
     except ValueError:
         return None
-    return f"{dd}/{mm}/{yyyy}"
+    return f"{d:02d}/{m:02d}/{y:04d}"
 
 
 def _corrected_date(raw_date: str | None) -> tuple[str, bool]:
+    """Returns (value, auto_corrected). Value is a clean DD/MM/YYYY when parseable; otherwise the
+    trimmed raw text is kept (never blanked - I4: losing the raw value loses information a human
+    could still read)."""
     date = normalize_date_to_ddmmyyyy(raw_date)
     if date is not None:
         return date, False
@@ -96,7 +111,8 @@ def _corrected_date(raw_date: str | None) -> tuple[str, bool]:
         corrected_date = normalize_date_to_ddmmyyyy(corrected_raw)
         if corrected_date is not None:
             return corrected_date, True
-    return "", False
+    raw = raw_date.strip() if isinstance(raw_date, str) else ""
+    return raw[:_MAX_FIELD_LENGTH], False
 
 
 def correct_amount_format(value: str | None) -> tuple[str, bool]:
@@ -105,8 +121,13 @@ def correct_amount_format(value: str | None) -> tuple[str, bool]:
     reach a clean plain-number shape, returns the trimmed ORIGINAL text unchanged."""
     if not value or not isinstance(value, str):
         return "", False
-    # Only strip thousands separators/currency marks, never digits or the decimal point.
-    cleaned = re.sub(r"[,₹]|rs\.?|RS\.?", "", value.strip()).strip()
+    # Only strip thousands separators/currency marks/trailing "/-"/"Only" noise, never digits
+    # or the decimal point.
+    cleaned = value.strip()
+    cleaned = _AMOUNT_NOISE_RE.sub("", cleaned)
+    cleaned = _AMOUNT_TRAILING_WORDS_RE.sub("", cleaned)
+    cleaned = re.sub(r"[,]", "", cleaned)
+    cleaned = cleaned.strip().rstrip("/-").strip()
     if not cleaned:
         return "", False
     if AMOUNT_RE.match(cleaned):
@@ -154,8 +175,13 @@ def _clean_text_field(value: Any, field: str) -> str:
         pass
     elif isinstance(value, int):
         text = str(value)
-    elif isinstance(value, float) and value == int(value):
-        text = str(int(value))
+    elif isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            text = None
+        elif value == int(value):
+            text = str(int(value))
+        else:
+            text = repr(value)
     if text is not None and 0 < len(text) <= _MAX_FIELD_LENGTH:
         return text
     if value is not None and not (isinstance(value, str) and not text):
@@ -239,7 +265,10 @@ def build_extraction_result(parsed: Any, today: date_type | None = None) -> dict
 
     date, out["dateAutoCorrected"] = _corrected_date(out["date"])
     out["date"] = date
-    out["dateNeedsReview"] = date_implausible(date or None, today or now_ist().date())
+    if re.match(r"^\d{2}/\d{2}/\d{4}$", date) and normalize_date_to_ddmmyyyy(date):
+        out["dateNeedsReview"] = date_implausible(date, today or now_ist().date())
+    else:
+        out["dateNeedsReview"] = bool(date)  # non-empty but unparseable -> flag for review
 
     for field in _AMOUNT_FIELDS:
         corrected, auto = correct_amount_format(out[field])
