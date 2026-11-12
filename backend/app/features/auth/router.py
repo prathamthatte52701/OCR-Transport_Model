@@ -6,7 +6,8 @@ from app.core.audit_log import log_action
 from app.core.database import get_database
 from app.core.rate_limit import (
     allow_password_reset_for_email,
-    enforce_login_email_limit,
+    check_login_email_limit,
+    record_login_failure,
     limiter,
 )
 from app.core.security import (
@@ -144,7 +145,7 @@ async def login(request: Request, body: LoginRequest) -> TokenResponse:
         # limiter and database never see the over-long key.
         verify_password(body.password, DUMMY_PASSWORD_HASH)
         raise HTTPException(status_code=401, detail="Invalid email or password.")
-    await enforce_login_email_limit(request, email)
+    check_login_email_limit(request, email)
 
     user = await db.users.find_one({"email": email})
     # Always run exactly one bcrypt check (against a dummy hash when there is no
@@ -153,6 +154,7 @@ async def login(request: Request, body: LoginRequest) -> TokenResponse:
     stored_hash = user.get("passwordHash") if user else None
     password_ok = verify_password(body.password, stored_hash or DUMMY_PASSWORD_HASH)
     if not user or not stored_hash or not password_ok:
+        record_login_failure(request, email)
         raise HTTPException(status_code=401, detail="Invalid email or password.")
     # Auto-close an open password-reset request: the user got in with their own password.
     # Skipped while a temporary password is in force (that request is already done). One

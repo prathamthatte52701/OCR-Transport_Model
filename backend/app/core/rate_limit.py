@@ -44,13 +44,29 @@ _email_limiter = MovingWindowRateLimiter(_email_storage)
 _email_login_limit = RateLimitItemPerMinute(20, 15)
 
 
-async def enforce_login_email_limit(request: Request, email: str) -> None:
-    key = email.strip().lower() if email and email.strip() else get_remote_address(request)
-    if not _email_limiter.hit(_email_login_limit, key):
+def _login_email_key(request: Request, email: str) -> str:
+    # Keyed on email + IP (not email alone): an attacker cannot lock a victim out of their own
+    # account by repeatedly failing from elsewhere - each attacking IP gets its own budget
+    # against that email (I13).
+    normalized = email.strip().lower() if email and email.strip() else "unknown"
+    return f"{normalized}:{get_remote_address(request)}"
+
+
+def check_login_email_limit(request: Request, email: str) -> None:
+    """Raises 429 if this email+IP has already used its budget, WITHOUT consuming a hit - a
+    successful login must never count against the budget (I13), so the caller checks here
+    before verifying the password and only calls `record_login_failure` after a failed one."""
+    key = _login_email_key(request, email)
+    if not _email_limiter.test(_email_login_limit, key):
         raise HTTPException(
             status_code=429,
             detail="Too many login attempts for this account. Please try again in a few minutes.",
         )
+
+
+def record_login_failure(request: Request, email: str) -> None:
+    key = _login_email_key(request, email)
+    _email_limiter.hit(_email_login_limit, key)
 
 
 # Password-reset-request per-email limiter: its OWN storage and limiter, so spamming reset
