@@ -31,7 +31,7 @@ def check_request(field: str, value: str | None) -> None:
     """Checks that need no document (run before the lookup, so they win over a 404)."""
     if field not in EDITABLE_FIELDS:
         raise HTTPException(status_code=400, detail="That field cannot be edited.")
-    if not value or not value.strip():
+    if value is None:
         raise HTTPException(status_code=400, detail="Please enter a value before saving.")
 
 
@@ -48,6 +48,8 @@ def validate_correction(doc: dict, field: str, raw_value: str) -> str:
             ),
         )
     value = raw_value.strip()
+    if not value:
+        return ""  # empty (or whitespace-only) means "clear this field"; non-empty rules below
 
     if field == "date":
         normalized = normalize_date_to_ddmmyyyy(value)
