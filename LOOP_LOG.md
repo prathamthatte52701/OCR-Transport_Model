@@ -90,3 +90,12 @@ Checklist of every feature. Tick after commit. Re-read this + spec at start of e
 
 ### Loop 5 — Docs + final proof
 - Not started.
+
+## Strict Loop
+
+### 2026-11-13 Track A, Task 1: admin correction did not refresh isDuplicate
+- Gap was real: user route called refresh_duplicate_flag itself after operatorName/receiptNumber/date edits; admin PATCH /admin/documents/{id} never did. NeedsReview resets were already shared (correction_set_fields via apply_correction) and fine.
+- Fix: refresh moved into shared correction_rules.apply_correction (uses the OWNER userId, not the editor); removed the user-route special case and its unused import. duplicate.py already excludes the doc via _id $ne and never flags blank fields - unchanged.
+- Tests: new documents/test_correction_refresh.py (both routes: fix dup, create dup, clear receiptNumber/date/totalAmount appears in needsReview=true, user==admin state, repeat edits, unrelated field, blank receipts never duplicate). Pre-fix run (with -x) showed the admin test failing; the other cases were not run pre-fix (not verified individually).
+- Ran: test_correction_refresh + test_duplicate + test_correction_integrity = 39 passed. Full suite not run (Task 5).
+- Open: none known.

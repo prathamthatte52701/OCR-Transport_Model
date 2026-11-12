@@ -42,7 +42,6 @@ from app.features.documents.correction_rules import (
     check_request,
     validate_correction,
 )
-from app.features.documents.duplicate import refresh_duplicate_flag
 from app.features.documents.gridfs_service import delete_file, download_buffer, upload_buffer
 from app.features.documents.warnings import compute_warnings
 from app.features.documents.schemas import (
@@ -1114,10 +1113,6 @@ async def correct_document(
     )
     updated = await db.documents.find_one({"_id": doc["_id"]})
     assert updated is not None
-    if body.field in ("operatorName", "receiptNumber", "date"):
-        await refresh_duplicate_flag(db, current_user.id, doc["_id"], updated)
-        updated = await db.documents.find_one({"_id": doc["_id"]})
-        assert updated is not None
     return {"message": "Field corrected successfully.", "document": _serialize_document(updated)}
 
 
