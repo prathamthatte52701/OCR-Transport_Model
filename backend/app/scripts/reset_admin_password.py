@@ -6,7 +6,7 @@ an admin's password changes. Run with:
 The new password is prompted for twice via getpass - never taken from argv/env, never printed
 or logged. `--db` must equal the MONGO_DB_NAME this process is configured with. --apply sets
 the new hash, bumps tokenVersion (logs out every existing session) and writes an audit entry.
-Refuses (non-zero exit) unknown/non-admin/Google-only accounts and passwords failing the rules.
+Refuses (non-zero exit) unknown/non-admin accounts and passwords failing the rules.
 """
 
 import argparse
@@ -37,8 +37,6 @@ async def reset_admin_password(db: Any, email: str, new_password: str, apply: bo
         raise Refused(f"No account with email {email!r}.")
     if user.get("role") != "admin":
         raise Refused(f"{email!r} is not an admin account.")
-    if not user.get("passwordHash"):
-        raise Refused(f"{email!r} is a Google-only account - it has no password to reset.")
     if err := validate_password(new_password, user.get("username"), email):
         raise Refused(f"Password rejected: {err}")
     if apply:

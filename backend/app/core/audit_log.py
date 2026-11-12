@@ -41,7 +41,7 @@ async def log_admin_access(
     resource_id: ObjectId | None = None,
 ) -> None:
     """Records that an admin opened, listed or downloaded someone else's data
-    (documents, images, export rows, workbooks). `target_user_id` is None when
+    (documents, images, export rows). `target_user_id` is None when
     the view spans all users. Looking at your own data is not logged."""
     if target_user_id is not None and target_user_id == admin_id:
         return

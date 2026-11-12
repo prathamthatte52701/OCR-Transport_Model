@@ -763,7 +763,7 @@ async def download_all_documents(
 ) -> StreamingResponse:
     """ "Download All" for one documents page: bundles every requested
     document's original file into a single ZIP, same page-scoping contract
-    as bulk-save (excel/router.py::bulk_save_documents_to_excel) - the
+    as the other bulk actions - the
     frontend sends exactly the document ids currently on that page. Any id that
     doesn't belong to this user, any document with no file (filePurged, or a
     GridFS fetch that fails for any reason) is silently skipped and counted

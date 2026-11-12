@@ -41,21 +41,18 @@ async def test_apply_sets_hash_bumps_token_version_and_audits(
 
 async def test_refusals(db: Any, make_user: Any) -> None:
     user = await make_user()
-    google_admin = await make_user(role="admin", password=None)
     admin = await make_user(role="admin")
     for email, pw in [
         (user.email, NEW),  # non-admin
-        (google_admin.email, NEW),  # Google-only
         ("nobody@looptest.local", NEW),  # unknown
         (admin.email, "weak"),  # weak password
         (admin.email, f"Zq9!{admin.username}!X"),  # contains username
     ]:
         with pytest.raises(rap.Refused):
             await rap.reset_admin_password(db, email, pw, apply=True)
-    for a in (user, google_admin, admin):
+    for a in (user, admin):
         u = await _user(db, a)
         assert u["tokenVersion"] == 0
-    assert "passwordHash" not in await _user(db, google_admin)
     assert verify_password(admin.password, (await _user(db, admin))["passwordHash"])
 
 

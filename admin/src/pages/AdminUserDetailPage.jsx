@@ -27,7 +27,7 @@ function WarningIcon({ className = 'h-4 w-4' }) {
 }
 
 // Two selectable modes, both ALWAYS scoped strictly to this one user's data
-// (documents, GridFS files, workbook rows/exports tied to them): (a)
+// (documents, GridFS files tied to them): (a)
 // age-based oldest-first (1/2/3/6/9 months), (b) exact year + specific
 // month(s). Mirrors the Dashboard's Global Nuke panel exactly - only the
 // target scope (this user vs every user) differs.

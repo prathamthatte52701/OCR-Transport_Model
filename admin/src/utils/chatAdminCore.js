@@ -62,7 +62,7 @@ export function isTyped(text) {
 }
 
 // Plain-words error for "delete ALL chat messages". The server's own sentence is kept for the cases
-// it words well (wrong password, Google-only account); the rate limit gets a fixed sentence.
+// it words well (wrong password); the rate limit gets a fixed sentence.
 export function describeGlobalClearError(err) {
   if (!err?.response) return 'Could not reach the server. Nothing was deleted.'
   if (err.response.status === 429) return 'Too many tries. Try again in an hour.'

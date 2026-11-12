@@ -1,4 +1,4 @@
-// Small table helpers shared by the list pages (Documents, Workbooks, Activity, Orphaned files).
+// Small table helpers shared by the list pages (Documents, Activity, Orphaned files).
 import { Avatar, Skeleton } from './ui'
 
 // Avatar + username + email, both truncated with a title so long values never break the row.

@@ -1,6 +1,5 @@
-"""Plausibility window for a paper's own DD/MM/YYYY date. Neutral home so ocr/ and excel/ can agree
-without importing each other (excel/service.py::document_period applies the same window; a parity
-test keeps the two in step)."""
+"""Plausibility window for a paper's own DD/MM/YYYY date. Neutral home so ocr/ and other
+modules can share one window without importing each other."""
 
 import re
 from datetime import date, timedelta

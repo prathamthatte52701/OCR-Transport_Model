@@ -10,8 +10,8 @@ class CorrectRequest(CamelModel):
 
 
 class DownloadAllRequest(CamelModel):
-    """ "Download All" on a documents page - same page-scoping contract as
-    BulkSaveRequest (excel/schemas.py): the frontend sends exactly the
+    """ "Download All" on a documents page - same page-scoping contract:
+    the frontend sends exactly the
     document ids currently rendered on that page, never the user's whole
     dataset. The id-count cap is enforced in the route (clean 400)."""
 
