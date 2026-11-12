@@ -151,7 +151,15 @@ def score_document(truth_fields: dict[str, Any], pred_fields: dict[str, Any]) ->
         truth = str(truth_fields.get(field, "") or "")
         pred = str(pred_fields.get(field, "") or "")
         strict, lenient = score_value(field, truth, pred)
-        out[field] = {"strict": strict, "lenient": lenient, "truth_blank": truth == ""}
+        truth_blank = truth == ""
+        out[field] = {
+            "strict": strict,
+            "lenient": lenient,
+            "truth_blank": truth_blank,
+            # T1: truth blank but the model answered anyway - an invented value. Invisible to
+            # strict/lenient (both skip truth_blank cells), so it needs its own flag.
+            "false_value": truth_blank and pred != "",
+        }
     return out
 
 
@@ -178,11 +186,41 @@ def aggregate(per_doc: list[dict[str, dict]]) -> dict:
         }
 
     per_field = {f: _field_stats((f,)) for f in ALL_FIELDS}
+
+    false_value_total = 0
+    false_value_opportunities = 0  # every truth_blank cell is a chance to invent a value
+    false_value_by_field: dict[str, int] = {f: 0 for f in ALL_FIELDS}
+    for doc in per_doc:
+        for f in ALL_FIELDS:
+            cell = doc.get(f)
+            if cell is None:
+                continue
+            if cell["truth_blank"]:
+                false_value_opportunities += 1
+                if cell["false_value"]:
+                    false_value_total += 1
+                    false_value_by_field[f] += 1
+    top_fields = sorted(
+        ((f, n) for f, n in false_value_by_field.items() if n > 0),
+        key=lambda kv: kv[1],
+        reverse=True,
+    )
+
     return {
         "overall": _field_stats(ALL_FIELDS),
         "core": _field_stats(CORE_FIELDS),
         "optional": _field_stats(OPTIONAL_FIELDS),
         "per_field": per_field,
+        "false_values": {
+            "count": false_value_total,
+            "opportunities": false_value_opportunities,
+            "rate": (
+                round(100 * false_value_total / false_value_opportunities, 1)
+                if false_value_opportunities
+                else None
+            ),
+            "top_fields": top_fields,
+        },
     }
 
 
@@ -217,12 +255,18 @@ def main(argv: list[str]) -> int:
 
     per_doc = []
     mismatches: list[tuple[str, str, str, str]] = []
+    seen_receipts: set[int] = set()  # T3: score each UNIQUE receipt once, not once per photo
     for row in rows:
         fname = row.get("file", "")
         truth = truth_by_file.get(fname)
         if truth is None:
             print(f"WARNING: no ground truth for {fname!r}, skipping", file=sys.stderr)
             continue
+        receipt_key = id(truth)  # _load_ground_truth reuses the same dict object per receipt
+        if receipt_key in seen_receipts:
+            print(f"NOTE: {fname!r} is a duplicate photo of an already-scored receipt, skipping", file=sys.stderr)
+            continue
+        seen_receipts.add(receipt_key)
         doc_score = score_document(truth, row)
         per_doc.append(doc_score)
         for field, cell in doc_score.items():
@@ -231,6 +275,13 @@ def main(argv: list[str]) -> int:
 
     agg = aggregate(per_doc)
     print(json.dumps(agg, indent=2))
+    print(
+        f"\nFalse values (truth blank, model answered anyway): "
+        f"{agg['false_values']['count']}/{agg['false_values']['opportunities']} "
+        f"({agg['false_values']['rate']}%)"
+    )
+    for field, n in agg["false_values"]["top_fields"]:
+        print(f"  {field}: {n}")
     print(f"\n{len(mismatches)} lenient mismatches:")
     for fname, field, t, p in mismatches:
         print(f"  {fname} | {field} | truth={t!r} | ocr={p!r}")

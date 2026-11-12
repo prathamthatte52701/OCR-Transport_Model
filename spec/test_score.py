@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from score import (  # noqa: E402
     aggregate,
+    main,
     score_document,
     score_value,
     worst_fields,
@@ -122,3 +123,51 @@ def test_none_like_missing_keys_treated_as_blank() -> None:
     result = score_document({"operator_name": "A"}, {})
     assert result["operator_name"]["strict"] is False
     assert result["operator_name"]["truth_blank"] is False
+
+
+def test_score_document_flags_false_value() -> None:
+    # T1: truth blank, prediction not blank - an invented value. Not a strict/lenient
+    # mismatch signal (truth_blank skips those), so it needs its own flag.
+    result = score_document({"freight": ""}, {"freight": "200"})
+    assert result["freight"]["truth_blank"] is True
+    assert result["freight"]["false_value"] is True
+
+
+def test_score_document_no_false_value_when_both_blank() -> None:
+    result = score_document({"freight": ""}, {"freight": ""})
+    assert result["freight"]["false_value"] is False
+
+
+def test_score_document_no_false_value_when_truth_present() -> None:
+    result = score_document({"freight": "100"}, {"freight": "200"})
+    assert result["freight"]["false_value"] is False
+
+
+def test_aggregate_counts_false_values() -> None:
+    per_doc = [
+        score_document({"freight": "", "remark": ""}, {"freight": "200", "remark": ""}),
+        score_document({"freight": "", "remark": ""}, {"freight": "", "remark": "invented"}),
+    ]
+    agg = aggregate(per_doc)
+    assert agg["false_values"]["count"] == 2
+    assert agg["false_values"]["rate"] > 0
+    top_fields = {f for f, _ in agg["false_values"]["top_fields"]}
+    assert top_fields == {"freight", "remark"}
+
+
+def test_main_scores_a_duplicate_receipt_pair_only_once(tmp_path, capsys) -> None:
+    gt = {
+        "receipts": [
+            {"files": ["a.jpg", "b.jpg"], "fields": {"operator_name": "Baba Travels"}},
+        ]
+    }
+    gt_path = tmp_path / "ground_truth.json"
+    gt_path.write_text(__import__("json").dumps(gt), encoding="utf-8")
+    results_path = tmp_path / "results.csv"
+    results_path.write_text(
+        "file,operator_name\na.jpg,Baba Travels\nb.jpg,Baba Travels\n", encoding="utf-8"
+    )
+    rc = main(["--ground-truth", str(gt_path), "--results", str(results_path)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert '"total": 1' in out  # scored once, not twice, for the duplicate pair
