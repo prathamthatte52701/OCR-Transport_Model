@@ -38,7 +38,7 @@ anything's wrong, with full correction history.
 
 ## Field list
 
-26 fields, flat (no nested objects), empty string when a field isn't printed on the receipt.
+27 fields, flat (no nested objects), empty string when a field isn't printed on the receipt.
 
 **Core** (shown on the review page even when blank): operator name, operator GSTIN, receipt
 number, date, destination place, consignee name, consignor name, package count, payment mode,

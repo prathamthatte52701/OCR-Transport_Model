@@ -2,7 +2,11 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
-from app.features.ocr.extraction import build_extraction_result, empty_extraction_result
+from app.features.ocr.extraction import (
+    EXTRACTION_VALUE_FIELDS,
+    build_extraction_result,
+    empty_extraction_result,
+)
 from app.features.ocr.json_parsing import parse_extraction_json
 from app.features.ocr.providers.base import AIProvider
 from app.features.ocr.providers.errors import BAD_REPLY, AIExtractionError
@@ -21,7 +25,7 @@ async def extract_header(
         return empty_extraction_result()
 
     provider = provider or GroqProvider()
-    system_prompt = _env.get_template(_TEMPLATE).render()
+    system_prompt = _env.get_template(_TEMPLATE).render(field_count=len(EXTRACTION_VALUE_FIELDS))
     user_prompt = f"Extract from this bus luggage/parcel receipt OCR text:\n\n{header_text}"
 
     # The model occasionally returns an empty/truncated reply (or JSON that is not an object);
