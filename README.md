@@ -16,9 +16,11 @@ the page's OCR text to extract the fields (never the image itself).
 anything's wrong, with full correction history.
 
 - Single upload, or bulk up to 5 receipts per request
-- Review page with the original photo always in view, per-field edit + correction history
-- Warnings for anything that looks unusual (missing/implausible date, GSTIN format, amount
-  mismatches, possible duplicate) — never blocks, just flags
+- Review page with the original photo always in view, per-field edit (any field can be cleared
+  back to blank, 300 characters max) + correction history
+- Warnings shown directly on the review page and flagged on the documents list, for anything
+  that looks unusual (missing/implausible date, GSTIN format, amount mismatches, possible
+  duplicate) — never blocks, just flags
 - Documents list: search by receipt number/operator/consignor/consignee, filter by date range,
   status, needs-review
 - A built-in chat between each user and the admins
@@ -56,7 +58,7 @@ Shown on the review page as a position + a short reason, never blocking:
 2. Date missing or implausible (more than 1 day in the future, or more than 5 years in the past)
 3. Total amount missing
 4. A GSTIN that's present doesn't match the standard 15-character format
-5. Total doesn't match freight + delivery charge + demurrage (only when those are present)
+5. Total doesn't match freight + delivery charge + demurrage + taxes (only when those are present)
 6. Total doesn't match the amount written in words (only when amount-in-words is present)
 7. A receipt number, consignor phone, or consignee phone looks incomplete (shape check)
 8. Possible duplicate: another document with the same operator + receipt number + date already
@@ -72,17 +74,25 @@ there exactly, not rounded up.
 
 | | Overall strict | Overall lenient | Core strict | Core lenient | Optional strict | Optional lenient |
 |---|---|---|---|---|---|---|
-| Run A (one-by-one) | 52.2% | 56.4% | 49.3% | 49.3% | 58.6% | 71.7% |
-| Run B (bulk of 5) | 56.7% | 60.9% | 53.1% | 53.1% | 64.6% | 77.8% |
+| Run A (one-by-one) | 57.2% | 60.9% | 53.9% | 53.9% | 65.1% | 77.1% |
+| Run B (bulk of 5) | 57.2% | 60.9% | 53.9% | 53.9% | 65.1% | 77.1% |
+
+False values (truth blank, model answered anyway — a new metric this round, no earlier
+baseline): 1.0% of opportunities in both runs, 2 occurrences each.
 
 **Honest assessment**: this is a working engine, not a finished one. The single biggest fix
-applied during development (see the accuracy report) was disabling a photo-preprocessing step
+applied early in development (see the accuracy report) was disabling a photo-preprocessing step
 that was destroying OCR quality on Baba Travels receipts rather than improving it — fixing that
-alone roughly doubled core accuracy. Remaining weak spots: `date` and `receipt_number` on some
-Baba Travels photos, traced to a genuine PaddleOCR text-detection miss on certain header lines
-(verified not a preprocessing artifact), and the two-copy slip layout, which still extracts
-mostly blank due to overprint and residual watermark noise. Neither is fixable with a per-image
-hack without risking overfitting to this specific test set.
+alone roughly doubled core accuracy. A later fix-loop pass removed leaked test-answer examples
+from the prompt and fixed a Baba field-source confusion (freight/deliveryAddress getting
+duplicated from a single printed value), pushing core accuracy from ~49% to ~54%. Remaining weak
+spots: `date` (22%), `prepared_by` (25%), and `receipt_number` (28-33%) on some Baba Travels
+photos, traced to a genuine PaddleOCR text-detection miss on certain header lines (verified not a
+preprocessing artifact), and the two-copy slip layout, which still extracts mostly blank due to
+overprint and residual watermark noise. Neither is fixable with a per-image hack without risking
+overfitting to this specific test set. **These numbers are measured on 18 receipts the prompt was
+also tuned against — see `spec/HOLDOUT.md` for what's needed before they mean more than
+fit-to-this-sample.**
 
 ## Quick start
 
