@@ -3,8 +3,7 @@ import { create } from 'zustand'
 // Backs two app-wide async dialogs (GlobalConfirmDialog / GlobalPromptDialog)
 // that replace window.confirm()/window.prompt() with the styled shadcn-style
 // Dialog, while keeping the same "await it like a function" call shape the
-// old code used - so ported logic (e.g. saveDocument()'s workbook-creation
-// retry) barely changes.
+// old code used.
 const useDialogStore = create((set) => ({
   confirmState: null,
   promptState: null,

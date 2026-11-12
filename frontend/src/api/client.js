@@ -56,8 +56,8 @@ function isUnreachable(err) {
 
 // FastAPI's error shape differs from the old Express API's `{ error }`:
 // - HTTPException -> { detail: "message" } (most routes)
-// - a few routes    -> { detail: { error, message, ... } } (e.g. workbook
-//   year-rollover 409s - the frontend needs the exact code, not just prose)
+// - a few routes    -> { detail: { error, message, ... } } (a structured 409
+//   needs the exact code, not just prose)
 // - slowapi rate limits -> { error: "message" } (its own default handler,
 //   never touches `detail`)
 // - 422 validation errors -> { detail: [{ msg, loc, ... }, ...] }
@@ -85,8 +85,8 @@ api.interceptors.response.use(
       message = 'Too many requests. Please wait a few minutes and try again.'
     }
     err.userMessage = message || fallback
-    // The structured 409 detail (e.g. NEED_NEW_WORKBOOK) - callers that need
-    // the machine-readable code read this instead of re-parsing userMessage.
+    // The structured 409 detail's machine-readable code - callers that need
+    // it read this instead of re-parsing userMessage.
     err.errorCode =
       err.response?.data?.detail && typeof err.response.data.detail === 'object'
         ? err.response.data.detail.error

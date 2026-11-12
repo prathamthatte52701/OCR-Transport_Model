@@ -1,6 +1,6 @@
 import api from './client'
 
-// Shared by downloadWorkbook() and downloadAllDocuments()
+// Shared download helpers
 // - all need the Authorization header attached (so this goes through the
 // shared `api` instance, not a raw window.open()/<a href> navigation, which
 // sends no auth header and would 401 against this backend's uniformly-

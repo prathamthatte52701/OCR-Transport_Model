@@ -50,8 +50,7 @@ function PromptForm({ promptState, resolvePrompt }) {
 }
 
 // Mounted once in App.jsx - renders whenever promptText() from
-// store/dialogStore is called anywhere in the app (replaces window.prompt(),
-// used for naming a new Excel workbook).
+// store/dialogStore is called anywhere in the app (replaces window.prompt()).
 export default function GlobalPromptDialog() {
   const promptState = useDialogStore((s) => s.promptState)
   const resolvePrompt = useDialogStore((s) => s.resolvePrompt)
