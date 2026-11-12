@@ -541,7 +541,7 @@ async def list_documents(
     if lower_bounds:
         filter_query["createdAt"] = {"$gte": max(lower_bounds)}
 
-    if page:
+    if page is not None:  # I14: page=0 is still paged mode, not the legacy unbounded list
         # Capped: page=10**18 used to overflow Mongo's skip (500) and
         # limit=10**9 returned everything in one response.
         lim = min(MAX_PAGE_SIZE, max(1, limit or 30))
