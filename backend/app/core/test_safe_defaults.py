@@ -55,12 +55,15 @@ async def test_docs_paths_404_in_running_app(client: object) -> None:
 
 
 def test_no_real_admin_identity_hardcoded_in_source() -> None:
+    """No non-test source file should hardcode a real email address - admin identities
+    come from settings (ADMIN_1_EMAIL etc), never from source. Generic email-shape check
+    rather than embedding any real address in this test itself."""
     offenders = []
     for path in (BACKEND / "app").rglob("*.py"):
         if path.name.startswith("test_"):
             continue
         text = path.read_text(encoding="utf-8")
-        if re.search(r"[redacted]|[redacted]|[redacted-name]|[redacted-name]", text):
+        if re.search(r"[A-Za-z0-9._%+-]+@(gmail|yahoo|outlook|hotmail)\.com", text):
             offenders.append(path.name)
     assert offenders == []
 
