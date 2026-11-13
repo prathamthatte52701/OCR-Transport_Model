@@ -28,6 +28,8 @@ OCR_STUCK = "OCR_STUCK"
 OCR_ENGINE_ERROR = "OCR_ENGINE_ERROR"  # the engine itself failed (model, memory, crash)
 OCR_TIMEOUT = "OCR_TIMEOUT"  # the engine took longer than its time limit
 NO_TEXT = "NO_TEXT"  # the engine ran fine but found no text (blank or unreadable paper)
+# The text was read and the AI answered, but fewer than 2 of the 11 core fields came out
+OCR_UNREADABLE = "OCR_UNREADABLE"
 # The catch-all of process_document: something unexpected failed after the upload
 PROCESSING_ERROR = "PROCESSING_ERROR"
 CODES = (
@@ -43,6 +45,7 @@ CODES = (
     OCR_ENGINE_ERROR,
     OCR_TIMEOUT,
     NO_TEXT,
+    OCR_UNREADABLE,
     PROCESSING_ERROR,
 )
 
@@ -73,6 +76,7 @@ _USER_MESSAGES = {
         "We could not read any text from this document. Try a clearer photo or scan, or a "
         "higher-quality PDF."
     ),
+    OCR_UNREADABLE: "We could not read this photo. Try a clearer photo or retry.",
     PROCESSING_ERROR: "Something went wrong while processing this document.",
 }
 

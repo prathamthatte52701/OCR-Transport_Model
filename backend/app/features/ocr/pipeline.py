@@ -18,7 +18,7 @@ from app.core.database import get_database
 from app.core.image_limits import ImageTooLarge, check_upload
 from app.features.ocr.ai_extraction import extract_header
 from app.features.documents.duplicate import check_duplicate
-from app.features.ocr.extraction import extraction_success_fields
+from app.features.ocr.extraction import CORE_FIELDS, extraction_success_fields
 from app.features.ocr.paddle_runner import (
     OCR_TIMEOUT_SECONDS_IMAGE,
     OCR_TIMEOUT_SECONDS_PDF,
@@ -44,6 +44,7 @@ from app.features.ocr.providers.errors import (
     OCR_ENGINE_ERROR,
     OCR_STUCK,
     OCR_TIMEOUT,
+    OCR_UNREADABLE,
     PROCESSING_ERROR,
     AIExtractionError,
     classify_exception,
@@ -67,6 +68,7 @@ _orphan_tasks: set[asyncio.Task] = set()  # keeps the release tasks referenced (
 # A hold longer than the longest legitimate OCR call (the image timeout) plus this grace means an
 # orphaned thread has outlived its timeout: the slot is "wedged".
 OCR_WEDGE_GRACE_SECONDS = 60
+MIN_CORE_FIELDS_FILLED = 2  # of the 11 core fields; fewer = unreadable photo
 _LOCK_WEDGED_THRESHOLD_SECONDS = OCR_TIMEOUT_SECONDS_IMAGE + OCR_WEDGE_GRACE_SECONDS
 # How often a job waiting for the slot re-checks whether the slot is wedged. Waiters are NOT
 # timed out in general: a legitimate bulk queue of dozens of documents may wait a long time.
@@ -572,6 +574,21 @@ async def process_document(
                     "ocrTextHidden": header_text,
                     "processingError": user_message(code),
                     "processingErrorCode": code,
+                },
+                run_id,
+            )
+            return
+
+        if sum(1 for f in CORE_FIELDS if str(result.get(f) or "").strip()) < MIN_CORE_FIELDS_FILLED:
+            # Text was read but almost nothing came out of it: a failed read, not a processed
+            # document. The text stays so a retry or an admin can see what the reader saw.
+            await _update_active_document(
+                doc_id,
+                {
+                    "uploadStatus": "failed",
+                    "ocrTextHidden": header_text,
+                    "processingError": user_message(OCR_UNREADABLE),
+                    "processingErrorCode": OCR_UNREADABLE,
                 },
                 run_id,
             )
