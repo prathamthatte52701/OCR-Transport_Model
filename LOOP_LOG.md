@@ -144,3 +144,10 @@ Bisection of the hang (all with the same timeout flags):
 - Prompt field 8 now: Baba "Delivery At" is toPlace; deliveryAddress usually null, fill only if a SEPARATE delivery address line is printed; never copy "Delivery At" into both.
 - Test `test_prompt_delivery_address_allows_separate_line_only` (renders template with field_count): failed vs old text (1 failed, 16 passed), passes after edit (17 passed). Existing code-guard tests (extraction.py deliveryAddress==toPlace clear, Baba-only) still pass, extraction.py untouched.
 - Effect not measured yet - will be assessed when Task 6 runs.
+
+### 2026-11-13 - Task E: duplicate-flag peer refresh on edit and delete
+- Bug: after A (dup of B) was edited/deleted, B's isDuplicate stayed stale. Track A only refreshed the edited doc.
+- Fix: `duplicate.py::refresh_peers(db, user_id, exclude_id, *keys)` - one owner-scoped query per key (old + new operator/receiptNumber/date, case/whitespace-insensitive, blanks skipped), refreshes each found peer once. Called from `correction_rules.apply_correction` (old = pre-edit doc, new = fresh doc), `documents/router.py::delete_document` and `admin/router.py::delete_document_as_admin` after the delete (owner's userId, not the admin's).
+- Failing first: 7 of 11 new tests failed (edit-away clears peer, edit-to-match flags peer, delete clears peer, user==admin parity; both routes). Three-way and cross-user passed trivially (guard tests).
+- After: test_correction_refresh.py + test_duplicate.py = 36 passed (test DB only). Tests: peer clear on edit, peer newly flagged, peer clear on delete, three-way remaining pair stays True, cross-user untouched (edit + delete), user/admin parity - each on both routes.
+- Real DB not touched.

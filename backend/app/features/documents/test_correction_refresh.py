@@ -121,3 +121,81 @@ async def test_break_blank_receipts_never_duplicate(client, db, make_user, route
     d = await _doc(db, u, receiptNumber="X")
     await _patch(client, route, u, make_user, d, "receiptNumber", "")
     assert (await _flags(db, d))["isDuplicate"] is False
+
+
+# --- Peer refresh: editing/deleting one doc re-checks the OTHER docs sharing its old/new key ---
+
+
+async def _dup(db: Any, doc_id: Any) -> Any:
+    return (await db.documents.find_one({"_id": doc_id}))["isDuplicate"]
+
+
+async def _delete(client: Any, route: str, owner: Any, make_user: Any, doc_id: Any):
+    if route == "user":
+        return await client.delete(f"/api/documents/{doc_id}", headers=owner.headers)
+    admin = await make_user(role="admin")
+    return await client.delete(f"/api/admin/documents/{doc_id}", headers=admin.headers)
+
+
+@pytest.mark.parametrize("route", ROUTES)
+async def test_peer_clears_when_partner_edited_away(client, db, make_user, route) -> None:
+    u = await make_user()
+    a = await _doc(db, u, isDuplicate=True)
+    b = await _doc(db, u, isDuplicate=True)
+    await _patch(client, route, u, make_user, a, "receiptNumber", "UNIQ")
+    assert await _dup(db, a) is False and await _dup(db, b) is False
+
+
+@pytest.mark.parametrize("route", ROUTES)
+async def test_peer_newly_flagged_when_edit_matches_it(client, db, make_user, route) -> None:
+    u = await make_user()
+    c = await _doc(db, u, receiptNumber="P7")
+    b = await _doc(db, u, receiptNumber="P9")
+    await _patch(client, route, u, make_user, b, "receiptNumber", "P7")
+    assert await _dup(db, b) is True and await _dup(db, c) is True
+
+
+@pytest.mark.parametrize("route", ROUTES)
+async def test_peer_cleared_on_delete(client, db, make_user, route) -> None:
+    u = await make_user()
+    a = await _doc(db, u, isDuplicate=True)
+    b = await _doc(db, u, isDuplicate=True)
+    r = await _delete(client, route, u, make_user, a)
+    assert r.status_code == 200
+    assert await _dup(db, b) is False
+
+
+@pytest.mark.parametrize("route", ROUTES)
+async def test_three_way_remaining_pair_stays_duplicate(client, db, make_user, route) -> None:
+    u = await make_user()
+    a = await _doc(db, u, isDuplicate=True)
+    b = await _doc(db, u, isDuplicate=True)
+    c = await _doc(db, u, isDuplicate=True)
+    await _patch(client, route, u, make_user, a, "receiptNumber", "UNIQ")
+    assert [await _dup(db, x) for x in (a, b, c)] == [False, True, True]
+
+
+@pytest.mark.parametrize("route", ROUTES)
+async def test_peer_refresh_never_crosses_users(client, db, make_user, route) -> None:
+    u1, u2 = await make_user(), await make_user()
+    a = await _doc(db, u1)
+    x = await _doc(db, u2, isDuplicate=True)  # deliberately stale/odd, must stay untouched
+    y = await _doc(db, u2, isDuplicate=False)
+    await _patch(client, route, u1, make_user, a, "receiptNumber", "ZZ")
+    assert await _dup(db, x) is True and await _dup(db, y) is False
+    await _delete(client, route, u1, make_user, a)
+    assert await _dup(db, x) is True and await _dup(db, y) is False
+
+
+async def test_user_and_admin_peer_results_match(client, db, make_user) -> None:
+    out = {}
+    for route in ROUTES:
+        u = await make_user()
+        a = await _doc(db, u, isDuplicate=True)
+        b = await _doc(db, u, isDuplicate=True)
+        c = await _doc(db, u, isDuplicate=True)
+        await _patch(client, route, u, make_user, a, "date", "01/01/2024")
+        out[route] = [await _dup(db, x) for x in (a, b, c)]
+        await _delete(client, route, u, make_user, b)
+        out[route] += [await _dup(db, c)]
+    assert out["user"] == out["admin"] == [False, True, True, False]

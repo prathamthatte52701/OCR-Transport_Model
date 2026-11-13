@@ -33,6 +33,7 @@ from app.features.admin.schemas import (
 from app.features.auth.dependencies import CurrentUser, require_admin
 from app.features.auth.schemas import TempPasswordRequest
 from app.features.chat.files import delete_attachments as chat_delete_attachments
+from app.features.documents.duplicate import refresh_peers
 from app.features.documents.correction_rules import (
     CHANGED_MSG,
     apply_correction,
@@ -818,6 +819,7 @@ async def delete_document_as_admin(
 
     await db.documents.delete_one({"_id": doc_id})
     await db.corrections.delete_many({"documentId": doc_id})
+    await refresh_peers(db, doc["userId"], doc_id, doc)
     await log_action(
         current_user.id,
         "document_deleted",

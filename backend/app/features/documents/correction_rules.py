@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.features.documents.correction import correction_set_fields
-from app.features.documents.duplicate import refresh_duplicate_flag
+from app.features.documents.duplicate import refresh_duplicate_flag, refresh_peers
 from app.features.ocr.extraction import (
     AMOUNT_RE,
     EXTRACTION_VALUE_FIELDS,
@@ -123,4 +123,6 @@ async def apply_correction(db: Any, doc: dict, field: str, value: str) -> bool:
         # Shared by user + admin routes. Duplicates are scoped to the OWNER, not the editor.
         fresh = await db.documents.find_one({"_id": doc["_id"]})
         await refresh_duplicate_flag(db, doc["userId"], doc["_id"], fresh)
+        # `doc` is the pre-edit snapshot: old-key peers may lose a partner, new-key peers gain one.
+        await refresh_peers(db, doc["userId"], doc["_id"], doc, fresh)
     return True

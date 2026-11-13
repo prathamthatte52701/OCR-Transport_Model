@@ -36,6 +36,7 @@ from app.core.orphaned_files import record_orphaned_file
 from app.core.rate_limit import UPLOAD_LIMIT, limiter
 from app.core.timezones import ist_midnight_utc, now_ist
 from app.features.auth.dependencies import CurrentUser, get_current_user
+from app.features.documents.duplicate import refresh_peers
 from app.features.documents.correction_rules import (
     CHANGED_MSG,
     apply_correction,
@@ -1007,6 +1008,7 @@ async def delete_document(
     db = get_database()
     await db.documents.delete_one({"_id": doc["_id"]})
     await db.corrections.delete_many({"documentId": doc["_id"]})
+    await refresh_peers(db, doc["userId"], doc["_id"], doc)
     await log_action(
         current_user.id,
         "document_deleted",
