@@ -186,3 +186,12 @@ Snapshot measured: 6c5a50a (master before Tasks A/B/C/E landed). Run A = 20 sing
 - build_extraction_result(parsed, today=None, ocr_text=None); ai_extraction.extract_header passes header_text. Rule clears freight only when ocr_text has no freight label (FREIGHT_LABEL_RE: fright/freight/fraght/frieght/frt, case-insensitive, noise tolerant). ocr_text None -> keep value, freightNeedsReview=True. Pawan untouched.
 - Tests (test_code_checks.py): no label -> cleared; "Fright 100"/total 100 -> kept; Fraght, "Fright :", FRIGHT:, Freight, Frieght, Frt -> kept; None -> kept+review; Pawan x3 untouched; extract_header passthrough. 71 passed (code_checks+extraction+amount_review).
 - Ground truth (15 Baba receipts): 14 have freight "" and 1 (186798) has "0.00" vs total 140; none has freight==total, so the rule only fires on AI mis-copies where the OCR has no label, matching the truth. Not verified against real OCR text (no live OCR, out of scope).
+
+### Coordinator independent re-verification (2026-11-13, post-merge of Tasks A/B/C/D/E)
+- Re-ran `pytest app --timeout=120 --durations=25` TWICE on the actual merged master (not trusting the agent's report alone, per explicit instruction to be critical):
+  - Run 1: 1156 passed, 1 skipped, 2 deselected, 322.83s.
+  - Run 2: 1156 passed, 1 skipped, 2 deselected, 323.77s.
+  - **Both runs agree exactly.** Slowest test 7.01s (test_timeout_boundary_race) - no hang, no outlier. The 70+ minute hang reported earlier this session is genuinely gone.
+- `test_clear_field.py` alone (the file the original hang got stuck inside): 58 passed in 14.86s.
+- Also spot-checked the merge itself: `refresh_peers` call sites in correction_rules.py/router.py/admin/router.py read correctly (doc=pre-edit snapshot, fresh=post-edit re-fetch); `test_correction_refresh.py` + `test_duplicate.py` re-run independently post-merge = 36 passed (316.67s against real Atlas test DB, confirming the `@pytest.mark.live`-gated real-DB path still works end to end, not just the fake).
+- Conclusion: Task A's fake-Mongo infra genuinely fixes the hang (verified by the coordinator independently, not just the subagent's self-report). Tasks A-E all merged and pushed.
