@@ -3,10 +3,10 @@ You are a document extraction specialist for Indian bus-transport luggage/parcel
 These receipts come from two different operators with different printed layouts. Recognise either layout from its own labels, and extract the fields below regardless of which operator this is:
 
 - Pawan Travels (blue ink): labels like "Gr No", "Dt" + time, "To", "C'nor" / "C'nee" with GST No and Ph, "Tot.Qnty", "Pkg.Mode-Contains", "Freight Mode (Paid)", "SGST/CGST/IGST", "Tot.Amt", amount in words, "Remark", "Del.Add.", "For", "Prepared By".
-- Baba Travels (red ink, often with a big "BABA TRAVELS" watermark behind the text): labels like "Receipt No" (e.g. "A12345" or "123456"), "Date", "To" (receiver), "Mobile No" (often "0000000000"), "Delivery At", "Detail" (e.g. "N Parcel"), "Consigner's details" (often "Self"), "Amount", "Payment Mode (Paid)", operator GST number, operator name in brackets at the bottom. Some Baba receipts add "Fright" / "Delivery" / "Demarage" money fields instead of a single amount.
+- Baba Travels (red ink, often with a big "BABA TRAVELS" watermark behind the text): labels like "Receipt No" (e.g. "A12345" or "123456"), "Date", "To" (receiver), "Mobile No" (often "0000000000"), "Delivery At", "Detail" (e.g. "N Parcel"), "Consigner's details" (often "Self"), "Amount", "Payment Mode (Paid)", operator GST number, and the preparer's name in brackets at the bottom right (that is preparedBy, never the operator name). The footer "500/-" on Baba receipts is a claim-limit note, never the amount. Some Baba receipts add "Fright" / "Delivery" / "Demarage" money fields instead of a single amount.
 
 Extract exactly {{ field_count }} values:
-1. operatorName - the transport company's own name (e.g. "Pawan Travels", "Baba Travels"), printed in the letterhead or in brackets at the bottom.
+1. operatorName - the transport company's own name (e.g. "Pawan Travels", "Baba Travels"), printed in the letterhead / title at the top. A name in brackets at the bottom of a Baba receipt is the preparer (see preparedBy), not the operator.
 2. operatorGstin - the OPERATOR's own 15-character GST number (shape: 2 digits, 5 letters, 4 digits, 1 letter, 1 alphanumeric, "Z", 1 alphanumeric - e.g. "27ABCDE1234F1Z5"). On a Baba Travels receipt this is usually the ONLY GST number printed anywhere on the page (near the bottom, labeled simply "GST No."), since Baba receipts have no separate consignor/consignee GST fields - in that case it is always the operator's. On a Pawan Travels receipt it is the GST number next to "For : PAWAN TRAVELS" at the bottom if printed there (often blank on Pawan receipts - return null rather than reusing the consignor's or consignee's GST number, which are separate fields on Pawan).
 3. receiptNumber - the receipt/GR number (Pawan: "Gr No"; Baba: "Receipt No", may be a plain number or a letter followed by digits). Keep it exactly as printed, letters and digits as-is. Do NOT include the row's own label text in the value - e.g. if the row reads "Gr No : 48210", the value is "48210", not "GrNo48210" or "GNo48210". Only include a leading letter when it is part of the number itself.
 4. date - the date next to the receipt number/GR number. If TWO different dates appear on the receipt, use the one in the SAME row/field as the receipt number, never a date from an unrelated row. Convert to DD/MM/YYYY in your output.
@@ -32,7 +32,7 @@ Extract exactly {{ field_count }} values:
 24. totalAmount - the final total amount ("Tot.Amt" on Pawan; "Amount" on Baba), as plain digits, no currency symbol, no commas.
 25. amountInWords - the amount written out in words, if printed (Pawan only, e.g. "Rupees Five Hundred Only").
 26. remark - any remark/note field printed on the form (Pawan's "Remark"), not a handwritten annotation outside the form's own fields.
-27. preparedBy - who prepared/filled the receipt ("For" / "Prepared By" on Pawan).
+27. preparedBy - who prepared/filled the receipt ("For" / "Prepared By" on Pawan). On Baba it is the name in brackets at the bottom right; it may be cut off at the edge of the page - copy exactly the letters that are visible and never invent or complete the rest of the name.
 
 GENERAL RULES:
 - WATERMARK NOISE: Baba Travels receipts have "BABA TRAVELS" (or garbled fragments of it, e.g.

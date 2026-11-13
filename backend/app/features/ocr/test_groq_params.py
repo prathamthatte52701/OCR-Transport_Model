@@ -116,7 +116,7 @@ async def test_blank_effort_sends_no_key(monkeypatch: pytest.MonkeyPatch) -> Non
     seen: list[dict] = []
     _fake(monkeypatch, None, 300, seen)
     assert await groq_provider.GroqProvider().extract("s", "u") == "{}"
-    assert "reasoning_effort" not in seen[0] and seen[0]["temperature"] == 0.1
+    assert "reasoning_effort" not in seen[0] and seen[0]["temperature"] == 0
 
 
 def test_startup_line_has_no_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -131,3 +131,28 @@ def test_startup_line_has_no_key(monkeypatch: pytest.MonkeyPatch) -> None:
     finally:
         logger.remove(hid)
     assert len(sink) == 1
+
+
+def test_temperature_setting_defaults_to_zero_and_is_validated() -> None:
+    from app.core.config import Settings
+
+    base = {"MONGO_URI": "mongodb://x", "JWT_SECRET": "x" * 40}
+    assert Settings(**base).groq_temperature == 0
+    assert Settings(**base, GROQ_TEMPERATURE="").groq_temperature == 0
+    assert Settings(**base, GROQ_TEMPERATURE="0.2").groq_temperature == 0.2
+    for bad in ("-1", "3", "abc"):
+        with pytest.raises(Exception):
+            Settings(**base, GROQ_TEMPERATURE=bad)
+
+
+@pytest.mark.asyncio
+async def test_temperature_sent_to_groq_comes_from_the_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[dict] = []
+    _fake(monkeypatch, None, 300, seen)
+    monkeypatch.setattr(groq_provider.settings, "groq_temperature", 0.0, raising=False)
+    await groq_provider.GroqProvider().extract("s", "u")
+    assert seen[0]["temperature"] == 0
+    seen.clear()
+    monkeypatch.setattr(groq_provider.settings, "groq_temperature", 0.3, raising=False)
+    await groq_provider.GroqProvider().extract("s", "u")
+    assert seen[0]["temperature"] == 0.3

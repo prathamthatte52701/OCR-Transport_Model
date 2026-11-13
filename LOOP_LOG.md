@@ -291,3 +291,20 @@ Snapshot measured: 6c5a50a (master before Tasks A/B/C/E landed). Run A = 20 sing
   - p97829 had a date in option (b) but is not detected as red (share 0.024), so it gets no gain in the pipeline.
 - Cost: 11 of the 16 Baba photos take the two-pass path. Wall time per photo, Task 0 -> now: +10.8, +12.5, +3.9, +9.7, +6.0, +5.6, +5.3, +7.9, +3.4, -4.5, -9.5 s (mean about +4.6 s; the single timings are noisy because the machine load differed between the two runs, so treat it as roughly +5 s per red page, one extra PaddleOCR pass).
 - Not verified: effect on the LLM-extracted fields (Task 7 measures that); only the raw OCR text was measured here.
+
+### Task 2: prompt fixes + Groq temperature setting (2026-11-14)
+- Rules (general): (1) a bracketed name at the bottom of a Baba receipt is the preparer, never the operator, so both "operator name in brackets" lines were removed from `prompts/transport_receipt.j2` (Baba bullet and field 1); (2) Baba preparedBy = the bracketed name at the bottom right, may be cut off, copy only the visible letters, never invent the rest; (3) the Baba footer "500/-" is a claim-limit note, never the amount; (4) extraction should be repeatable, so `GROQ_TEMPERATURE` is a setting (default 0, blank = 0, validated 0 to 2, listed in `.env.example`) and `groq_provider.py` sends it instead of the hard-coded 0.1.
+- Tests written first (6 failed before the change): `test_code_checks.py` x3 (old lines absent, new bracket/preparedBy/"500/-" lines present), `test_groq_params.py` x2 new (default 0 / blank / "0.2" / bad values "-1", "3", "abc" refused; value sent to Groq follows the setting) and the old `temperature == 0.1` assertion changed to 0.
+- Command: `pytest app/features/ocr app/core -q` -> `570 passed, 1 skipped, 1 deselected, 2 warnings in 39.88s`; the two touched files alone: `58 passed in 0.24s`.
+- Live proof (real Groq, 15 calls, saved Task 0 OCR text, current prompt, temperature 0): 5 Baba receipts x 3 runs, preparedBy / operatorName identical in all 3 runs for every receipt (AGREE=True x5):
+
+| receipt | truth preparedBy | preparedBy (runs 1-3) | operatorName (runs 1-3) |
+|---|---|---|---|
+| baba_p8851 | Shresth Sharma | Shresth Sharma x3 | Baba Travels x3 |
+| baba_p97300 | Rahul Sharma | empty x3 | Baba Travels x3 |
+| baba_p97433 | Alok Sen | "Alok  -  Sen" x3 | Baba Travels x3 |
+| baba_p97990 | Sagar Sharma | "Sagar Sharmal" x3 | BABA TRAVELS x3 |
+| baba_p98250 | Alok Sen | Alok Sen x3 | Baba Travels x3 |
+
+  Same text gives the same answer. Two of five are exactly right, and the bracketed name is now read into preparedBy (it was never read there before). Wrong ones come from the OCR text itself (p97433 has the "-" noise, p97990 has the trailing "l", p97300 has no name in the text), not from the model - the prompt rule says copy what is visible. operatorName casing still differs between receipts ("BABA TRAVELS" vs "Baba Travels"): left as decided earlier (case-insensitive downstream).
+- Not verified: accuracy over all 20 photos (Task 7 measures it); only 5 receipts x 3 runs here, from the pre-Task-1 OCR text.

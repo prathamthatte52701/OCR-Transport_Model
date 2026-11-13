@@ -146,3 +146,30 @@ def test_prompt_delivery_address_allows_separate_line_only():
     assert "must always be null" not in p
     assert "fill it only if the receipt prints a SEPARATE delivery address line" in p
     assert "never copy the \"Delivery At\" value" in p
+
+
+def _rendered_prompt() -> str:
+    from app.features.ocr.ai_extraction import _TEMPLATE, _env
+    from app.features.ocr.extraction import EXTRACTION_VALUE_FIELDS
+
+    return _env.get_template(_TEMPLATE).render(field_count=len(EXTRACTION_VALUE_FIELDS))
+
+
+def test_prompt_bracket_name_is_prepared_by_not_operator_name():
+    text = _rendered_prompt()
+    assert "operator name in brackets" not in text
+    assert "or in brackets at the bottom" not in text
+    assert "bracket" in text.lower()
+    assert "never the operator name" in text.lower()
+
+
+def test_prompt_baba_prepared_by_rule_is_copy_what_is_visible():
+    text = _rendered_prompt()
+    assert "cut off" in text
+    assert "never invent" in text.lower()
+
+
+def test_prompt_baba_footer_500_is_not_the_amount():
+    text = _rendered_prompt()
+    assert '"500/-"' in text
+    assert "claim-limit" in text

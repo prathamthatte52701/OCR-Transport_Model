@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     # the JSON output - "low" leaves far more of that budget for the actual answer.
     groq_reasoning_effort: str | None = Field(default="low", alias="GROQ_REASONING_EFFORT")
     groq_max_tokens: int = Field(default=3000, alias="GROQ_MAX_TOKENS")
+    # 0 = same OCR text gives the same answer run to run (extraction, not creative writing).
+    groq_temperature: float = Field(default=0.0, alias="GROQ_TEMPERATURE")
     frontend_origin: str = Field(default=DEFAULT_FRONTEND_ORIGIN, alias="FRONTEND_ORIGIN")
     admin_origin: str = Field(default=DEFAULT_ADMIN_ORIGIN, alias="ADMIN_ORIGIN")
     admin_1_password: str = Field(default="", alias="ADMIN_1_PASSWORD")
@@ -129,6 +131,19 @@ class Settings(BaseSettings):
         if not text.isascii() or not text.isdigit() or not 50 <= int(text) <= 8000:
             raise ValueError("GROQ_MAX_TOKENS must be a whole number from 50 to 8000.")
         return int(text)
+
+    @field_validator("groq_temperature", mode="before")
+    @classmethod
+    def _clean_temperature(cls, value: object) -> object:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return 0.0
+        try:
+            number = float(str(value).strip())
+        except ValueError:
+            raise ValueError("GROQ_TEMPERATURE must be a number from 0 to 2.") from None
+        if not 0 <= number <= 2:
+            raise ValueError("GROQ_TEMPERATURE must be a number from 0 to 2.")
+        return number
 
     @field_validator("audit_log_retention_days", mode="before")
     @classmethod

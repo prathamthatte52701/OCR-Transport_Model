@@ -123,7 +123,7 @@ class GroqProvider(AIProvider):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "temperature": 0.1,
+            "temperature": settings.groq_temperature,
             "max_tokens": max_tokens,
         }
         if settings.groq_reasoning_effort is not None:
