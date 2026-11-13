@@ -41,7 +41,7 @@ def correction_set_fields(field: str, value: str, now: datetime) -> dict:
         "edited": True,
         "updatedAt": now,
     }
-    if field in AUTO_CORRECTED_FIELDS:
+    if field in AUTO_CORRECTED_FIELDS or field.endswith("Gstin"):
         # Manual entry supersedes the auto-correction pass - no longer
         # something the OCR correction layer touched.
         set_fields[f"{field}AutoCorrected"] = False

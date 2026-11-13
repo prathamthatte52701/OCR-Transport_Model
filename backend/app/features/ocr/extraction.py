@@ -278,15 +278,54 @@ def normalize_gstin(value: str | None) -> tuple[str, bool]:
     return cleaned, GSTIN_RE.match(cleaned) is None
 
 
+_GSTIN_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+# OCR confusion pairs, each direction (O<->0, I<->1, S<->5, B<->8, Z<->2).
+_GSTIN_SWAPS = {"O": "0", "0": "O", "I": "1", "1": "I", "S": "5", "5": "S", "B": "8", "8": "B", "Z": "2", "2": "Z"}
+
+
+def gstin_checksum_ok(g: str) -> bool:
+    """Public mod-36 check-digit algorithm over the first 14 characters."""
+    if len(g) != 15 or any(c not in _GSTIN_CHARS for c in g):
+        return False
+    total = 0
+    for i, c in enumerate(g[:14]):
+        v = _GSTIN_CHARS.index(c) * (1 if i % 2 == 0 else 2)
+        total += v // 36 + v % 36
+    return _GSTIN_CHARS[(36 - total % 36) % 36] == g[14]
+
+
+def check_gstin(cleaned: str) -> tuple[str, bool, bool]:
+    """(value, auto_corrected, needs_review) for an already-uppercased GSTIN. A valid shape +
+    checksum passes. Otherwise a repair happens only when exactly ONE single-character
+    confusion swap yields a valid shape AND checksum; no or several candidates -> flag only."""
+    if not cleaned:
+        return "", False, False
+    if GSTIN_RE.match(cleaned) and gstin_checksum_ok(cleaned):
+        return cleaned, False, False
+    fixes = set()
+    if len(cleaned) == 15:
+        for i, c in enumerate(cleaned):
+            swap = _GSTIN_SWAPS.get(c)
+            cand = cleaned[:i] + swap + cleaned[i + 1:] if swap else None
+            if cand and GSTIN_RE.match(cand) and gstin_checksum_ok(cand):
+                fixes.add(cand)
+    if len(fixes) == 1:
+        return fixes.pop(), True, False
+    return cleaned, False, True
+
+
 def normalize_phone(value: str | None) -> tuple[str, bool]:
-    """Digits only (spaces/dashes stripped); 0000000000 is kept exactly and accepted. Returns
-    (value, needs_review)."""
+    """Digits only (spaces/dashes stripped). A leading 91 (12 digits) or 0 (11 digits) is dropped.
+    Valid = 10 digits starting 6-9, or an all-zero placeholder (printed as 0000000000, but the
+    ground truth also has "00" / 9 zeros - kept valid, never flagged). Returns (value, needs_review)."""
     if not value or not isinstance(value, str):
         return "", False
     digits = re.sub(r"[^\d]", "", value.strip())
     if not digits:
         return "", False
-    return digits, PHONE_RE.match(digits) is None
+    if len(digits) == 12 and digits.startswith("91") or len(digits) == 11 and digits.startswith("0"):
+        digits = digits[-10:]
+    return digits, not (PHONE_RE.match(digits) and digits[0] in "6789" or set(digits) == {"0"})
 
 
 def _clean_text_field(value: Any, field: str) -> str:
@@ -370,6 +409,7 @@ EXTRACTION_FLAG_FIELDS = (
     "consigneeGstinNeedsReview",
     "consignorPhoneNeedsReview",
     "consigneePhoneNeedsReview",
+    *(f"{f}AutoCorrected" for f in _GSTIN_FIELDS),
     *(f"{f}AutoCorrected" for f in _AMOUNT_FIELDS),
     *(f"{f}NeedsReview" for f in _AMOUNT_FIELDS),
 )
@@ -459,9 +499,23 @@ def build_extraction_result(
         out["totalAmountNeedsReview"] = True
 
     for field in _GSTIN_FIELDS:
-        value, needs_review = normalize_gstin(out[field])
-        out[field] = value
-        out[f"{field}NeedsReview"] = needs_review
+        value, _ = normalize_gstin(out[field])
+        out[field], out[f"{field}AutoCorrected"], out[f"{field}NeedsReview"] = check_gstin(value)
+
+    # GST business rules: SGST == CGST; IGST and CGST/SGST are mutually exclusive.
+    def _num(f: str) -> float | None:
+        try:
+            return float(out[f]) if out[f] else None
+        except ValueError:
+            return None
+
+    sgst, cgst, igst = _num("sgst"), _num("cgst"), _num("igst")
+    if sgst is not None and cgst is not None and sgst != cgst:
+        out["sgstNeedsReview"] = out["cgstNeedsReview"] = True
+    if igst and (sgst or cgst):
+        out["igstNeedsReview"] = True
+        out["sgstNeedsReview"] |= bool(sgst)
+        out["cgstNeedsReview"] |= bool(cgst)
 
     for field in _PHONE_FIELDS:
         value, needs_review = normalize_phone(out[field])

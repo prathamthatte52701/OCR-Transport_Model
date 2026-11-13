@@ -201,3 +201,87 @@ def test_operator_both_names_not_snapped():
 def test_baba_rules_see_snapped_operator():
     out = build({"operatorName": "Baba Travels, INDORE PT", "date": "05 MAR 2025"})
     assert out["dateNeedsReview"] is True
+
+
+# ---------------- GROUP 4: GST and phone ----------------
+
+REAL = ("27AAECK1993K1Z3", "23AABCE9378F3ZI", "23AHQPS8492M1ZA", "27AAPFU0939F1ZV")
+
+
+@pytest.mark.parametrize("g", REAL)
+def test_valid_checksum_not_flagged(g):
+    out = build({"consignorGstin": g})
+    assert out["consignorGstin"] == g and out["consignorGstinNeedsReview"] is False
+    assert out["consignorGstinAutoCorrected"] is False
+
+
+def test_checksum_fail_no_single_fix_flagged_value_kept():
+    bad = "27AAECK1993K1Z4"  # wrong check char; the only "fix" would be a non-confusion char
+    out = build({"consigneeGstin": bad})
+    assert out["consigneeGstin"] == bad and out["consigneeGstinNeedsReview"] is True
+    assert out["consigneeGstinAutoCorrected"] is False
+
+
+@pytest.mark.parametrize("good,bad", [
+    ("23AABCE9378F3ZI", "23AABCE9378F3Z1"),   # checksum char I misread as 1
+    ("23AHQPS8492M1ZA", "23AHQP58492M1ZA"),   # S read as 5 (wrong shape too)
+    ("27AAPFU0939F1ZV", "27AAPFUO939F1ZV"),   # 0 read as O
+])
+def test_single_confusion_fix_repairs_and_marks_autocorrected(good, bad):
+    out = build({"consignorGstin": bad})
+    assert out["consignorGstin"] == good
+    assert out["consignorGstinAutoCorrected"] is True and out["consignorGstinNeedsReview"] is False
+
+
+def test_ambiguous_or_multi_fix_only_flags():
+    # two confusable characters both wrong (O for 0 and S for 5): one fix cannot pass -> flag
+    out = build({"consignorGstin": "23AHQP58492M1ZA".replace("8492", "84O2")})
+    assert out["consignorGstinNeedsReview"] is True and out["consignorGstinAutoCorrected"] is False
+
+
+def test_operator_gstin_checked_too_and_blank_untouched():
+    assert build({"operatorGstin": "23AHQPS8492M1ZA"})["operatorGstinNeedsReview"] is False
+    assert build({"operatorGstin": "23AHQP8492M1ZA"})["operatorGstinNeedsReview"] is True  # 14 chars
+    assert build({})["operatorGstinNeedsReview"] is False
+
+
+@pytest.mark.parametrize("raw,want", [
+    ("+918518888766", "8518888766"), ("918518888766", "8518888766"), ("08518888766", "8518888766"),
+    ("+91 85188 88766", "8518888766"), ("8518888766", "8518888766"), ("9198765432", "9198765432"),
+])
+def test_phone_prefix_stripped_valid(raw, want):
+    out = build({"consignorPhone": raw})
+    assert out["consignorPhone"] == want and out["consignorPhoneNeedsReview"] is False
+
+
+@pytest.mark.parametrize("raw", ["0000000000", "00", "000000000"])
+def test_placeholder_zero_phone_valid(raw):
+    out = build({"consigneePhone": raw})
+    assert out["consigneePhone"] == raw and out["consigneePhoneNeedsReview"] is False
+
+
+@pytest.mark.parametrize("raw", ["5518888766", "851888876", "85188887661", "1234567890", "+91518888766", "123"])
+def test_phone_bad_flagged(raw):
+    assert build({"consignorPhone": raw})["consignorPhoneNeedsReview"] is True
+
+
+def test_sgst_cgst_must_match():
+    out = build({"sgst": "9", "cgst": "9"})
+    assert out["sgstNeedsReview"] is False and out["cgstNeedsReview"] is False
+    out = build({"sgst": "9", "cgst": "4.5"})
+    assert out["sgstNeedsReview"] is True and out["cgstNeedsReview"] is True
+    out = build({"sgst": "9.0", "cgst": "9"})  # numerically equal
+    assert out["sgstNeedsReview"] is False
+    out = build({"sgst": "9", "cgst": ""})  # one blank: no comparison
+    assert out["sgstNeedsReview"] is False
+
+
+def test_igst_and_cgst_sgst_both_nonzero_is_a_break():
+    out = build({"igst": "18", "sgst": "9", "cgst": "9"})
+    assert all(out[f"{f}NeedsReview"] for f in ("igst", "sgst", "cgst"))
+    out = build({"igst": "18", "sgst": "0", "cgst": "0"})
+    assert not any(out[f"{f}NeedsReview"] for f in ("igst", "sgst", "cgst"))
+    out = build({"igst": "0", "sgst": "9", "cgst": "9"})
+    assert not any(out[f"{f}NeedsReview"] for f in ("igst", "sgst", "cgst"))
+    out = build({"igst": "18"})
+    assert out["igstNeedsReview"] is False
