@@ -46,3 +46,27 @@ async def refresh_duplicate_flag(db: Any, user_id: Any, doc_id: Any, doc: dict) 
     is_duplicate = await check_duplicate(db, user_id, doc_id, doc)
     await db.documents.update_one({"_id": doc_id}, {"$set": {"isDuplicate": is_duplicate}})
     return is_duplicate
+
+
+async def refresh_peers(db: Any, user_id: Any, exclude_id: Any, *keys: dict) -> None:
+    """Re-checks isDuplicate on every OTHER non-deleted doc of this owner that shares any of
+    the given operator+receiptNumber+date keys (a doc's old and new key after an edit, or its
+    key after a delete). One targeted query per key; blank keys are skipped."""
+    seen: set = set()
+    for key in keys:
+        if not (key.get("operatorName") and key.get("receiptNumber") and key.get("date")):
+            continue
+        cursor = db.documents.find(
+            {
+                "_id": {"$ne": exclude_id},
+                "userId": user_id,
+                "isDeleted": {"$ne": True},
+                "operatorName": _exact_ci_regex(key["operatorName"]),
+                "receiptNumber": _exact_ci_regex(key["receiptNumber"]),
+                "date": key["date"],
+            }
+        )
+        async for peer in cursor:
+            if peer["_id"] not in seen:
+                seen.add(peer["_id"])
+                await refresh_duplicate_flag(db, user_id, peer["_id"], peer)
