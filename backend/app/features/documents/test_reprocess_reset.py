@@ -26,6 +26,7 @@ ALLOWED_EXTRA = {
     "uploadStatus",
     "updatedAt",
     "reprocessedAt",
+    "isDuplicate",
 }
 
 
