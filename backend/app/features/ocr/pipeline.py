@@ -17,7 +17,7 @@ from app.core.config import settings
 from app.core.database import get_database
 from app.core.image_limits import ImageTooLarge, check_upload
 from app.features.ocr.ai_extraction import extract_header
-from app.features.documents.duplicate import check_duplicate
+from app.features.documents.duplicate import refresh_duplicate_flag, refresh_peers
 from app.features.ocr.extraction import CORE_FIELDS, extraction_success_fields
 from app.features.ocr.paddle_runner import (
     OCR_TIMEOUT_SECONDS_IMAGE,
@@ -445,6 +445,21 @@ async def _update_active_document(doc_id: ObjectId, update: dict, run_id: str | 
     return res.matched_count > 0
 
 
+async def _flag_duplicates(doc_id: ObjectId) -> None:
+    """Runs AFTER the document write is committed: of two copies finishing at the same moment the
+    second one always sees the first one's stored values, and refreshing the peers flags the
+    earlier copy too. Warn-only feature, so a failure here is logged and never fails the read."""
+    try:
+        db = get_database()
+        doc = await db.documents.find_one({"_id": doc_id})
+        if doc is None:
+            return
+        await refresh_duplicate_flag(db, doc["userId"], doc_id, doc)
+        await refresh_peers(db, doc["userId"], doc_id, doc)
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"Duplicate check failed: class={type(exc).__name__}")
+
+
 async def _log_processed(doc_id: ObjectId) -> None:
     try:
         doc = await get_database().documents.find_one(
@@ -602,13 +617,10 @@ async def process_document(
             "processedAt": datetime.now(UTC),
         }
         update.update(extraction_success_fields(result))
-
-        db = get_database()
-        owner = await db.documents.find_one({"_id": doc_id}, {"userId": 1})
-        if owner is not None:
-            update["isDuplicate"] = await check_duplicate(db, owner["userId"], doc_id, update)
+        update["isDuplicate"] = False  # the real check runs below, after this write is committed
 
         if await _update_active_document(doc_id, update, run_id):
+            await _flag_duplicates(doc_id)
             await _log_processed(doc_id)
     except Exception as exc:  # noqa: BLE001
         logger.error(f"process_document error: class={type(exc).__name__}")
