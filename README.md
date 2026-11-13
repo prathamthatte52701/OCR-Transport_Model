@@ -87,6 +87,28 @@ spelling-corrected; digit contamination in free text is only flagged.
 Tests: `backend/app/features/ocr/test_deterministic_rules.py`. Offline proof against the stored
 20-image results: `spec/replay_rules_proof.py` (see `LOOP_LOG.md`).
 
+## Reading behaviour added in the strict loop (2026-11-14)
+
+- **Red-ink (Baba) pages are read twice**: a red-channel gray copy and a dark-ink-only copy are
+  OCR'd and merged (one `# source: dark-ink` comment line marks the join), because the typed
+  receipt number and date sit on the red print. Pawan pages keep the single original pass
+  (verified byte-identical). Costs about 5 extra seconds per red page.
+- **Unreadable photo = failed, not processed**: if fewer than 2 of the 11 core fields come out,
+  the document is saved `failed` with code `OCR_UNREADABLE` ("We could not read this photo. Try a
+  clearer photo or retry."); the hidden OCR text is kept and Retry/Reprocess works from it.
+- **Receipt number**: Pawan must be 5 plain digits; Baba is `P` + 4-5 digits, 6 digits, or the
+  printed comma form; Baba with 5 plain digits is flagged (dropped `P`). Any repair (label strip,
+  O/S/l fix after the `P`) sets `receiptNumberAutoCorrected`; a manual edit clears it and
+  `receiptNumberNeedsReview`.
+- **Duplicates are flagged when the document is saved, for BOTH copies**: the check runs after the
+  write is committed and refreshes the other copies, so two copies uploaded one after another or
+  at the same moment (bulk) both end up flagged.
+- **Prompt**: the bracketed name at the bottom of a Baba receipt is `preparedBy` (never the
+  operator), may be cut off (copy only what is visible), and the footer "500/-" is a claim-limit
+  note, never the amount. Groq temperature is the `GROQ_TEMPERATURE` setting (default 0).
+- **Tests**: `pytest app` runs on an in-process fake Mongo (1345 passed, 1 skipped in about 3
+  minutes); the 2 `@pytest.mark.live` tests that touch real Atlas run with `pytest app -m live`.
+
 ## Accuracy
 
 Measured against 18 unique hand-verified receipts (`spec/ground_truth.json`), scored two ways:
@@ -99,6 +121,18 @@ there exactly, not rounded up.
 |---|---|---|---|---|---|---|
 | Run A (one-by-one) | 57.2% | 60.9% | 53.9% | 53.9% | 65.1% | 77.1% |
 | Run B (bulk of 5) | 57.2% | 60.9% | 53.9% | 53.9% | 65.1% | 77.1% |
+
+**Latest real run (v3, final code, dev set, optimistic; `spec/full_test_actual_vs_ocr_v3.md`)**:
+
+| | Overall strict | Overall lenient | Core strict | Core lenient | Optional strict | Optional lenient |
+|---|---|---|---|---|---|---|
+| Run A (one-by-one) | 68.1% | 70.3% | 63.2% | 63.2% | 79.5% | 86.7% |
+| Run B (bulk of 5) | 68.1% | 70.3% | 62.7% | 62.7% | 80.7% | 88.0% |
+
+A whole receipt with all 11 core fields right: 3 of 18; with all 27 fields right: 1 of 18. Two
+Baba photos still cannot be read at all (they now fail as `OCR_UNREADABLE`), and `operator_gstin`
+got slightly worse (53.3% to 46.7%) because the red-page copies sometimes drop the letterhead
+line - see the log for the open fix. The table above is the older run.
 
 False values (truth blank, model answered anyway — a new metric this round, no earlier
 baseline): 1.0% of opportunities in both runs, 2 occurrences each.
@@ -147,7 +181,7 @@ identity set in `ADMIN_1_EMAIL`/`ADMIN_1_PASSWORD`.
 All backend config lives in `backend/.env` (never committed — see `.env.example` for the names
 only, no real values). Required: `MONGO_URI`, `JWT_SECRET` (32+ chars). Optional: `GROQ_API_KEYS`
 (comma-separated, round-robined on failure), `GROQ_MODEL`, `GROQ_REASONING_EFFORT` (default
-`low`), `GROQ_MAX_TOKENS` (default 3000, ceiling 8000), `MONGO_DB_NAME` (default
+`low`), `GROQ_MAX_TOKENS` (default 3000, ceiling 8000), `GROQ_TEMPERATURE` (default 0), `MONGO_DB_NAME` (default
 `docintel_transport`), `FRONTEND_ORIGIN`/`ADMIN_ORIGIN`, `ADMIN_1_NAME`/`ADMIN_1_EMAIL`/
 `ADMIN_1_PASSWORD` and the same for `ADMIN_2_*` (seed-only, used once by `seed_admin`, then only
 the bcrypt hash persists), `ENABLE_DOCS` (exposes `/docs`/`/redoc`, off by default everywhere).
