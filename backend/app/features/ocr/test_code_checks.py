@@ -79,3 +79,12 @@ def test_baba_different_freight_kept():
 def test_pawan_freight_equal_total_kept():
     out = build({"operatorName": "Pawan Travels", "freight": "250", "totalAmount": "250"})
     assert out["freight"] == "250"
+
+
+def test_prompt_delivery_address_allows_separate_line_only():
+    from app.features.ocr.ai_extraction import _env, _TEMPLATE
+    from app.features.ocr.extraction import EXTRACTION_VALUE_FIELDS
+    p = _env.get_template(_TEMPLATE).render(field_count=len(EXTRACTION_VALUE_FIELDS))
+    assert "must always be null" not in p
+    assert "fill it only if the receipt prints a SEPARATE delivery address line" in p
+    assert "never copy the \"Delivery At\" value" in p
