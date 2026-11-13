@@ -72,3 +72,4 @@ backend/logs/
 # Test images (not shipped, kept local only)
 testing data/
 spec/*.tmp
+spec/ocr_text/

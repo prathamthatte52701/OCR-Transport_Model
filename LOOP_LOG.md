@@ -239,3 +239,32 @@ Snapshot measured: 6c5a50a (master before Tasks A/B/C/E landed). Run A = 20 sing
 - FALSE FLAGS (new flag on a value that matches ground truth): **0** across all 40 rows / 18 receipts. Every new flag raised in the replay: receipt_number "OLSHASIAVEL" (truth P98506), "02/2025" (truth P97990), "703/202" (truth P98828) in Run A, the first two again in Run B - all wrong values, so true positives; Run B fromPlace "INDORE" on a Baba receipt (truth blank) - true positive. Iterations that WOULD have been false flags and were fixed before this run: the strict-literal phone rule would flag truth phones "00" and "000000000" (accepted as all-zero placeholders), and the loose-shape-> strict receipt-number rule flagged the old fixture "TR/2526/000123" (test fixture only, not ground truth). The Group 3 "Baba Travels" snap iteration is in Group 3.
 - Still failing after rules: 229 strict misses across both runs; 197 are "OCR returned empty" (absent data - NOT a fix opportunity, no credit claimed). 32 are wrong OCR values: receipt_number 02/2025, 703/202, B.0.27, (and OLSHASIAVEL counted empty-adjacent) are now FLAGGED but obviously not fixable; unflagged real gaps (honest list): package_description "PARCEL-PARCEL" vs "PARCEL - PARCEL" (spacing around hyphen, a text-style rule nobody asked for), from_place "W DORE" (spelling, never auto-corrected), delivery_address "MAYARAMJI 8087536777" (3 rows), remark "SAEDVBOX", consignee_name "AR"/"ToVe Commercial"/"Commercial" (label leak or truncation, no digit so unflagged), package_count 2 vs 6, total_amount 0.00 vs 1000.00, operator_name "ELSLASA TRAVELS" (wrong, not snapped, unflagged), operator_gstin "23AHQP8492M1ZA" (14 chars, already flagged before), date "01/04/2026" vs 21/04/2026 and time "17:17" vs "17:17:59" on one Baba photo (digit misread/truncation, parses as a valid date so not detectable).
 - Net honest take: the new rules are mostly guard rails on this dataset; measurable accuracy gain is small (+1.4pp overall) because almost all misses are OCR blanks or misreads that are valid-looking.
+
+## Session 2 (2026-11-13) - 8-task loop
+
+### Task 0: raw OCR text baseline (no LLM)
+- Command: `cd backend && ./venv/Scripts/python.exe <scratch>/t0.py ../spec/ocr_text` - runs the LIVE image path (normalize_photo -> crop_left_copy(crop_header) -> assess_and_preprocess -> run_ocr), no Groq. Output saved to `spec/ocr_text/<file stem>.txt` (20 files, gitignored, never committed).
+- Result (stem = "WhatsApp Image 2026-11-10 at <time>"; recno = regex `P\d{4,5}|\d{5,6}` anywhere in text - LOOSE, also matches phones/GST digits; date = `dd/mm/yyyy` or `dd MON yyyy`):
+
+| time stem | truth id | len | recno | date | sec |
+|---|---|---|---|---|---|
+| 22.01.33 (1) | pawan_gr28625 | 661 | Y | Y | 19.1 |
+| 22.01.33 (2) | pawan_gr41468 | 491 | Y | Y | 13.4 |
+| 22.01.33 | pawan_gr38420 | 654 | Y | Y | 16.1 |
+| 22.01.34 (3) | baba_p8851 | 877 | Y | Y | 18.0 |
+| 22.01.34 | baba_186798 | 864 | N | N | 19.1 |
+| 22.01.37 (2) | baba_p98250 | 405 | Y | N | 12.0 |
+| 22.01.37 | baba_p98506 | 353 | Y | N | 8.7 |
+| 22.01.38 (1) | baba_p98755 | 78 | N | N | 3.4 |
+| 22.01.38 (2) | baba_p97394 | 359 | Y | N | 10.3 |
+| 22.01.38 | baba_p98010 | 529 | Y | N | 11.5 |
+| 22.01.39 (1) | baba_p97300 | 452 | Y | Y | 11.3 |
+| 22.01.39 | baba_p97433 | 594 | Y | N | 13.1 |
+| 22.01.40 (1) | baba_p98506 | 578 | Y | N | 15.0 |
+| 22.01.40 (2) | baba_p98635 | 235 | Y | N | 10.3 |
+| 22.01.40 | baba_p97990 | 492 | Y | N | 22.3 |
+| 22.01.41 (1) | baba_p98347 | 619 | Y | N | 28.2 |
+| 22.01.41 (2) | baba_p98828 | 633 | N | N | 28.8 |
+| 22.01.41 | baba_p97829 | 791 | Y | N | 38.4 |
+| 22.01.42 (3) | pawan_gr28625 | 659 | Y | Y | 33.6 |
+| 22.01.54 (2) | baba_p98595 | 714 | Y | N | 29.0 |
