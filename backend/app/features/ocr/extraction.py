@@ -27,9 +27,6 @@ _AMOUNT_TRAILING_WORDS_RE = re.compile(r"\b(only)\b\s*", re.IGNORECASE)
 _TWO_DIGIT_YEAR_MIN, _TWO_DIGIT_YEAR_MAX = 2000, 2099
 GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")
 PHONE_RE = re.compile(r"^\d{10}$")
-# A receipt number must have at least one letter-or-digit run of reasonable length; this is a
-# shape check only (never changed or rejected), matching spec item 7 ("looks incomplete").
-RECEIPT_NUMBER_SHAPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ,/-]{1,19}$")
 # A plain amount: digits only, optional one decimal point with 1-2 places (commas/currency
 # symbols are stripped before this check runs).
 AMOUNT_RE = re.compile(r"^\d+(\.\d{1,2})?$")
@@ -192,6 +189,32 @@ def normalize_time(raw: str) -> tuple[str, bool]:
         if h <= 23 and int(mi) < 60 and (sec is None or int(sec) < 60):
             return f"{h:02d}:{mi}{':' + sec if sec else ''}", False
     return raw, bool(t)
+
+
+# ---- Group 2: receipt number ----
+_RECEIPT_LABEL_RE = re.compile(r"^\s*(?:receipt\s*no|gr\s*no|r\s*no)\b\.?\s*[:\-]?\s*|^\s*(?:gr|r)\s*no(?=\d)\.?\s*", re.IGNORECASE)
+# Pawan = 5 digits; Baba = P + 4-5 digits or 6 digits (optionally printed with thousands commas).
+_RECEIPT_VALID_RES = (
+    re.compile(r"^\d{5}$"), re.compile(r"^P\d{4,5}$"), re.compile(r"^\d{6}$"),
+    re.compile(r"^\d{1,3}(,\d{2,3})+$"),
+)
+_P_DIGIT_CONFUSION = str.maketrans("OSl", "051")
+
+
+def _clean_receipt_number(value: str) -> tuple[str, bool]:
+    """(value, needs_review). Strips a leftover label ("GrNo28625"); fixes O/S/l -> 0/5/1 only in
+    the digit part of a "P"-prefixed number; everything else unrecognised is kept and flagged."""
+    v = _RECEIPT_LABEL_RE.sub("", value, count=1).strip() if value else ""
+    if not v:
+        return "", False
+    if v[0] == "P" and not v[1:].isdigit():
+        fixed = "P" + v[1:].translate(_P_DIGIT_CONFUSION)
+        if fixed[1:].isdigit():
+            v = fixed
+    ok = any(rx.match(v) for rx in _RECEIPT_VALID_RES)
+    if ok and "," in v and len(v.replace(",", "")) != 6:
+        ok = False
+    return v, not ok
 
 
 def correct_amount_format(value: str | None) -> tuple[str, bool]:
@@ -423,8 +446,7 @@ def build_extraction_result(
         if m:
             out["packageCount"], out["packageDescription"] = m.group(1), m.group(2).strip()
 
-    receipt = out["receiptNumber"]
-    out["receiptNumberNeedsReview"] = bool(receipt) and RECEIPT_NUMBER_SHAPE_RE.match(receipt) is None
+    out["receiptNumber"], out["receiptNumberNeedsReview"] = _clean_receipt_number(out["receiptNumber"])
 
     return out
 

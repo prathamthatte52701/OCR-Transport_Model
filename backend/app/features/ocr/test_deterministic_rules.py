@@ -99,3 +99,42 @@ def test_break_attempts_group1():
     assert out["date"] == "21/04/2026" and out["time"] == "25:99:00" and out["timeNeedsReview"] is True
     # whole-number AI value and None don't crash
     assert build({"date": 17701, "time": None})["date"] == "17701"
+
+
+# ---------------- GROUP 2: receipt number ----------------
+
+
+@pytest.mark.parametrize("raw,want", [
+    ("GrNo28625", "28625"), ("Gr No 28625", "28625"), ("gr no: 28625", "28625"),
+    ("R No 41468", "41468"), ("RNo41468", "41468"), ("Receipt No P98250", "P98250"),
+    ("RECEIPT NO. 38420", "38420"),
+])
+def test_receipt_label_prefix_stripped(raw, want):
+    out = build({"receiptNumber": raw})
+    assert out["receiptNumber"] == want and out["receiptNumberNeedsReview"] is False
+
+
+@pytest.mark.parametrize("val", ["28625", "P8851", "P98250", "123456", "186,798", "1,86,798"])
+def test_valid_receipt_shapes_kept_as_printed_not_flagged(val):
+    out = build({"receiptNumber": val})
+    assert out["receiptNumber"] == val and out["receiptNumberNeedsReview"] is False
+
+
+@pytest.mark.parametrize("raw,want", [("PO1234", "P01234"), ("PS8851", "P58851"), ("Pl2345", "P12345"), ("P9O25O", "P90250"),
+    ("P9X250", None), ("PD1234", None), ("2862S", None)])
+def test_confusion_fix_only_in_digit_part_after_leading_p(raw, want):
+    out = build({"receiptNumber": raw})
+    if want:
+        assert out["receiptNumber"] == want and out["receiptNumberNeedsReview"] is False
+    else:  # any other letter/digit mixing is not guess-fixed
+        assert out["receiptNumber"] == raw and out["receiptNumberNeedsReview"] is True
+
+
+@pytest.mark.parametrize("val", ["B.0.27", "OLSHASIAVEL", "02/2025", "703/202", "2862S", "O8625", "PP1234", "P123", "1234"])
+def test_other_shapes_flagged_value_kept(val):
+    out = build({"receiptNumber": val})
+    assert out["receiptNumber"] == val and out["receiptNumberNeedsReview"] is True
+
+
+def test_label_only_becomes_blank_unflagged():
+    assert build({"receiptNumber": "GrNo"})["receiptNumber"] == ""

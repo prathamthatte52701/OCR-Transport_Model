@@ -207,3 +207,11 @@ Snapshot measured: 6c5a50a (master before Tasks A/B/C/E landed). Run A = 20 sing
 - Fix (extraction.py): `_repair_date` (month-name parse; noisy month resolves only if exactly ONE month is a 1-letter miss / >=0.8 close match, else value kept + dateNeedsReview; slash-misread repaired only if the result is a real 2000-2100 calendar date), trailing time moved to `time` only when `time` empty, `normalize_time` ("H:MM AM/PM", "HH:MM[:SS]", range-checked). Baba + month-name date -> dateNeedsReview (value still parsed). NEW flag `timeNeedsReview` (no time flag existed; additive, no rename) - also added to documents/correction.py NEEDS_REVIEW_FIELDS so a manual time edit clears it.
 - Brutal/break tests: MAX (MAR/MAY ambiguous) kept+flagged, XYZ, 31 FEB, 32701/2025, 17713/2025 (month 13), existing time never overwritten, baked-in 25:99:00 moved unnormalised + flagged, int AI value, Baba numeric date with 24h time not flagged. 28 passed; ocr date/extraction/code_checks/amount tests 122 passed; documents correction/reset tests 54 passed.
 - Needs owner decision: 24h time without seconds ("17:17") is emitted as "17:17" (spec only names the with-seconds form).
+
+### Deterministic rules - Group 2: receipt number (2026-11-13)
+- Found: only a loose shape regex ("looks incomplete") existed; labels glued to the value ("GrNo28625") and letter/digit garbage like "B.0.27", "OLSHASIAVEL" never reliably flagged, "P" confusion not handled.
+- Failing test first: test_deterministic_rules.py Group 2 block (23 failed before the fix).
+- Fix (extraction.py `_clean_receipt_number`): strip GrNo / Gr No / R No / Receipt No prefix; valid shapes = 5 digits, P+4-5 digits, 6 digits, thousands-comma form (186,798 and 1,86,798, kept as printed, 6 digits total); O/S/l -> 0/5/1 only in the digit part of a P-prefixed value; anything else flagged, value kept. Removed now-unused RECEIPT_NUMBER_SHAPE_RE.
+- Brutal/break tests: 2862S, O8625, PP1234, P123, 1234, P9X250, PD1234, 02/2025, 703/202, label-only "GrNo" -> blank.
+- Decision taken (flag if you disagree): "digit part" read as the whole run after the P (P9O25O -> P90250), not only the first char. A P-fix is silent (no receiptNumberAutoCorrected flag exists; not added).
+- 59 passed in test_deterministic_rules; related ocr/warnings tests 103 passed.
