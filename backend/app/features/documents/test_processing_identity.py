@@ -477,7 +477,7 @@ async def _flagged(db: Any, user: Any) -> Any:
 
 
 CLEARS = {
-    "receiptNumber": ("receiptNumberNeedsReview",),
+    "receiptNumber": ("receiptNumberAutoCorrected", "receiptNumberNeedsReview"),
     "date": ("dateAutoCorrected", "dateNeedsReview"),
     "operatorGstin": ("operatorGstinAutoCorrected", "operatorGstinNeedsReview"),
     "totalAmount": ("totalAmountAutoCorrected", "totalAmountNeedsReview"),

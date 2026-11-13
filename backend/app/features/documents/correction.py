@@ -5,6 +5,7 @@ from datetime import datetime
 
 AUTO_CORRECTED_FIELDS = (
     "date",
+    "receiptNumber",
     "packageCount",
     "freight",
     "deliveryCharge",
@@ -31,7 +32,7 @@ NEEDS_REVIEW_FIELDS = (
     # Amount fields gained their own NeedsReview flag this loop (extraction.py's
     # confusion-map/Baba guards) - a manual correction must clear it too, or a typed-in
     # value stays stuck flagged forever.
-    *AUTO_CORRECTED_FIELDS[1:],  # packageCount, freight, deliveryCharge, demurrage, sgst, cgst, igst, totalAmount
+    *AUTO_CORRECTED_FIELDS[2:],  # packageCount, freight, deliveryCharge, demurrage, sgst, cgst, igst, totalAmount
 )
 
 

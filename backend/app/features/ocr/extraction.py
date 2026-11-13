@@ -193,28 +193,41 @@ def normalize_time(raw: str) -> tuple[str, bool]:
 
 # ---- Group 2: receipt number ----
 _RECEIPT_LABEL_RE = re.compile(r"^\s*(?:receipt\s*no|gr\s*no|r\s*no)\b\.?\s*[:\-]?\s*|^\s*(?:gr|r)\s*no(?=\d)\.?\s*", re.IGNORECASE)
-# Pawan = 5 digits; Baba = P + 4-5 digits or 6 digits (optionally printed with thousands commas).
-_RECEIPT_VALID_RES = (
-    re.compile(r"^\d{5}$"), re.compile(r"^P\d{4,5}$"), re.compile(r"^\d{6}$"),
-    re.compile(r"^\d{1,3}(,\d{2,3})+$"),
+# Pawan = 5 plain digits; Baba = P + 4-5 digits or 6 digits (optionally printed with thousands
+# commas). Baba with 5 plain digits is flagged: the "P" was probably dropped.
+_RECEIPT_PAWAN_RE = re.compile(r"^\d{5}$")
+_RECEIPT_BABA_RES = (
+    re.compile(r"^P\d{4,5}$"), re.compile(r"^\d{6}$"), re.compile(r"^\d{1,3}(,\d{2,3})+$"),
 )
+_RECEIPT_LOOSE_RES = (_RECEIPT_PAWAN_RE, *_RECEIPT_BABA_RES)  # operator not known
 _P_DIGIT_CONFUSION = str.maketrans("OSl", "051")
 
 
-def _clean_receipt_number(value: str) -> tuple[str, bool]:
-    """(value, needs_review). Strips a leftover label ("GrNo28625"); fixes O/S/l -> 0/5/1 only in
-    the digit part of a "P"-prefixed number; everything else unrecognised is kept and flagged."""
-    v = _RECEIPT_LABEL_RE.sub("", value, count=1).strip() if value else ""
+def _clean_receipt_number(value: str, operator: str = "") -> tuple[str, bool, bool]:
+    """(value, needs_review, auto_corrected). A leftover label ("GrNo28625") is stripped and O/S/l
+    -> 0/5/1 is fixed only in the digit part of a "P"-prefixed number; both count as a repair
+    (auto_corrected). The shape is then checked per operator; anything unrecognised is kept and
+    flagged, never guessed."""
+    raw = value.strip() if value else ""
+    v = _RECEIPT_LABEL_RE.sub("", raw, count=1).strip() if raw else ""
     if not v:
-        return "", False
+        return "", False, False
     if v[0] == "P" and not v[1:].isdigit():
         fixed = "P" + v[1:].translate(_P_DIGIT_CONFUSION)
         if fixed[1:].isdigit():
             v = fixed
-    ok = any(rx.match(v) for rx in _RECEIPT_VALID_RES)
+    auto = v != raw
+    op = operator.lower()
+    if "pawan" in op and "baba" not in op:
+        shapes = (_RECEIPT_PAWAN_RE,)
+    elif "baba" in op and "pawan" not in op:
+        shapes = _RECEIPT_BABA_RES
+    else:
+        shapes = _RECEIPT_LOOSE_RES
+    ok = any(rx.match(v) for rx in shapes)
     if ok and "," in v and len(v.replace(",", "")) != 6:
         ok = False
-    return v, not ok
+    return v, not ok, auto
 
 
 # ---- Group 3: text fields ----
@@ -402,6 +415,7 @@ EXTRACTION_FLAG_FIELDS = (
     "dateAutoCorrected",
     "dateNeedsReview",
     "receiptNumberNeedsReview",
+    "receiptNumberAutoCorrected",
     "timeNeedsReview",
     *(f"{f}NeedsReview" for f in _TEXT_REVIEW_FIELDS),
     "operatorGstinNeedsReview",
@@ -530,7 +544,9 @@ def build_extraction_result(
         if m:
             out["packageCount"], out["packageDescription"] = m.group(1), m.group(2).strip()
 
-    out["receiptNumber"], out["receiptNumberNeedsReview"] = _clean_receipt_number(out["receiptNumber"])
+    out["receiptNumber"], out["receiptNumberNeedsReview"], out["receiptNumberAutoCorrected"] = (
+        _clean_receipt_number(out["receiptNumber"], out["operatorName"])
+    )
 
     return out
 
