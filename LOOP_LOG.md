@@ -195,3 +195,8 @@ Snapshot measured: 6c5a50a (master before Tasks A/B/C/E landed). Run A = 20 sing
 - `test_clear_field.py` alone (the file the original hang got stuck inside): 58 passed in 14.86s.
 - Also spot-checked the merge itself: `refresh_peers` call sites in correction_rules.py/router.py/admin/router.py read correctly (doc=pre-edit snapshot, fresh=post-edit re-fetch); `test_correction_refresh.py` + `test_duplicate.py` re-run independently post-merge = 36 passed (316.67s against real Atlas test DB, confirming the `@pytest.mark.live`-gated real-DB path still works end to end, not just the fake).
 - Conclusion: Task A's fake-Mongo infra genuinely fixes the hang (verified by the coordinator independently, not just the subagent's self-report). Tasks A-E all merged and pushed.
+
+### Task F (2026-11-13) - final verification, no code changes
+- Needs-review filter + pagination (real API, zz_tr_f_user, 8 docs: missing receiptNumber, missing date, missing total, isDuplicate, receiptNumberNeedsReview flag, 3 clean): needsReview=true returned exactly the 5 expected rows (FLAG, DUP, MISSTOT, MISSDATE, MISSRN), none of the 3 clean. limit=2: page=0 and page=1 both [FLAG, DUP] (I14 intact), page=2 [MISSTOT, MISSDATE], page=3 [MISSRN]; totalDocuments 5, totalPages 3, no duplicates or skips. VERIFIED.
+- Admin table row refresh after edit (real Chromium/Playwright, admin app :4000): edited receiptNumber R8 -> ZZEDIT999 in EditDocumentModal, saved, closed modal; the table row behind it shows ZZEDIT999 with no reload. VERIFIED (screenshot of the post-close page checked).
+- No fixes, no code commits. Cleanup: test users/docs/audit logs deleted by exact id, direct counts 0.
