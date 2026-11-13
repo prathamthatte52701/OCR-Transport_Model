@@ -13,7 +13,7 @@ Extract exactly {{ field_count }} values:
 5. time - the time next to the date (Pawan's "Dt" row often has a time stamp). Keep as printed (e.g. "14:30" or "2:30 PM").
 6. fromPlace - the origin place/branch, if printed.
 7. toPlace - the destination PLACE/city ("To" on Pawan, e.g. "PUNE"; Baba's "Delivery At" field). On Baba, toPlace is NEVER the receiver's name next to "To" - that name is consigneeName (field 12), not a place.
-8. deliveryAddress - a FULLER delivery address, ONLY when it is printed as its OWN separate field from toPlace (Pawan's "Del.Add." row). Baba Travels has NO separate delivery-address field - its only location field is "Delivery At", which is toPlace (field 7). On a Baba receipt, deliveryAddress must always be null; never copy "Delivery At" into both toPlace and deliveryAddress.
+8. deliveryAddress - a FULLER delivery address, ONLY when it is printed as its OWN separate field from toPlace (Pawan's "Del.Add." row). On Baba Travels, "Delivery At" is toPlace (field 7) and deliveryAddress is usually null: fill it only if the receipt prints a SEPARATE delivery address line besides "Delivery At" - never copy the "Delivery At" value into both toPlace and deliveryAddress.
 9. consignorName - the sender's name ("C'nor" on Pawan; "Consigner's details" on Baba, often literally "Self").
 10. consignorGstin - the consignor's own GST number, if printed (Pawan sometimes shows GST next to C'nor).
 11. consignorPhone - the consignor's phone number, if printed.
