@@ -151,3 +151,22 @@ Bisection of the hang (all with the same timeout flags):
 - Failing first: 7 of 11 new tests failed (edit-away clears peer, edit-to-match flags peer, delete clears peer, user==admin parity; both routes). Three-way and cross-user passed trivially (guard tests).
 - After: test_correction_refresh.py + test_duplicate.py = 36 passed (test DB only). Tests: peer clear on edit, peer newly flagged, peer clear on delete, three-way remaining pair stays True, cross-user untouched (edit + delete), user/admin parity - each on both routes.
 - Real DB not touched.
+
+### 2026-11-13 - Task 6: full 20-image OCR test (dev set, optimistic)
+Snapshot measured: 6c5a50a (master before Tasks A/B/C/E landed). Run A = 20 single uploads, Run B = 4 bulk batches of 5. 40/40 processed, no errors/retries.
+
+**Worst 5 fields (strict), both runs**: time 0.0% (n=5), delivery_address 0.0% (n=4), remark 0.0% (n=1), prepared_by 18.8-25.0% (n=16), date 22.2% (n=18).
+
+**Headline (strict/lenient, 18 unique receipts)**:
+| scope | Run A | Run B |
+|---|---|---|
+| core | 54.9 / 54.9 | 53.4 / 53.4 |
+| optional | 65.1 / 77.1 | 62.7 / 74.7 |
+| overall | 58.0 / 61.6 | 56.2 / 59.8 |
+
+- A vs B differ on 25/540 cells (same code/prompt/model - only variance source is Groq sampling). Mismatches: 111 (A), 117 (B). False values: 2 rows.
+- Speed: A ~25.1s/doc. B: 4 batches at 144.4/80.1/102.7/200.7s wall, ~26.4s/doc throughput, ~82.3s/doc from batch-start (queueing).
+- Stored-doc checks: Pawan GR28625 pair - only the SECOND-uploaded copy got isDuplicate=true within Run A (the first stayed False) - this is exactly the stale-flag bug Task E (merged separately, same session) fixes going forward; Run B then correctly flagged both A-run copies too, once two existed. Baba P98506 pair: no flag either run (OCR gave blank/garbled receiptNumber, no key to match on - a real OCR miss, not a flag-logic bug). dateNeedsReview False on all 40 (dates were blank, not implausible). needsReview=true returned 37/40 (the 3 excluded only have the total-vs-parts warning, which is read-time-computed and not filterable, as documented).
+- Full tables: spec/full_test_actual_vs_ocr.md. Raw data: spec/full_test_results.csv.
+- Cleanup: zz_tr_t7 (40 docs, 40 GridFS files/42 chunks, 81 audit logs) and a leftover orphaned zz_tr_t6 from an earlier interrupted attempt (0 docs, 4 audit logs) both deleted by exact id. AFTER counts: 0 for every collection, both users, confirmed by direct query (coordinator ran the actual delete after the agent's delete command was denied by the permission classifier as an irreversible action - verified the delete script first: scoped by exact _id, asserts username/role/email shape, docintel_transport only).
+- **Labeled explicitly: these 20 images were used to tune the prompt earlier in this project - every number above is dev-set/optimistic, not a generalization measure. See spec/HOLDOUT.md.**
