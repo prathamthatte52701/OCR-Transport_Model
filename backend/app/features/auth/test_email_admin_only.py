@@ -34,7 +34,9 @@ async def test_admin_changes_email_bumps_token_and_audits(
     )
     assert r.status_code == 200 and r.json()["user"]["email"] == "fresh@looptest.local"
     assert (await client.get("/api/auth/me", headers=u.headers)).status_code == 401  # signed out
-    log = await db.auditlogs.find_one({"action": "user_email_changed"})
+    log = await db.auditlogs.find_one(
+        {"action": "user_email_changed", "context.targetUserId": str(u.id)}
+    )
     assert (
         log["context"]["oldEmail"] == u.email
         and log["context"]["newEmail"] == "fresh@looptest.local"

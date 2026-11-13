@@ -212,6 +212,12 @@ async def test_get_ocr_failure(
         raise FileNotFoundError("model missing")
 
     monkeypatch.setattr(paddle_runner, "_get_ocr", broken)
+    # The real run_ocr (image decode, lazy imports) runs here, so the autouse 0.3s timeouts would
+    # race it (-> OCR_TIMEOUT/OCR_STUCK on a slow machine). The error is raised, never waited
+    # for, so generous limits cost nothing and remove the wall-clock dependency.
+    monkeypatch.setattr(pipeline, "OCR_TIMEOUT_SECONDS_IMAGE", 120.0)
+    monkeypatch.setattr(pipeline, "OCR_TIMEOUT_SECONDS_PDF", 120.0)
+    monkeypatch.setattr(pipeline, "_LOCK_WEDGED_THRESHOLD_SECONDS", 240.0)
     d = await run_doc(db, make_user)
     failed_with(d, "OCR_ENGINE_ERROR", ENGINE_MSG)
     assert "class=FileNotFoundError" in logs.failed_lines()[0]
