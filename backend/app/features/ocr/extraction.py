@@ -217,6 +217,22 @@ def _clean_receipt_number(value: str) -> tuple[str, bool]:
     return v, not ok
 
 
+# ---- Group 3: text fields ----
+_PHONE_GLUED_RE = re.compile(r"(?<=[A-Za-z])(\d{10})(?!\d)")
+_PREPARED_BY_OK_RE = re.compile(r"^[A-Za-z .]+$")
+_OPERATOR_TAIL_RE = re.compile(r"[,\s]*indore\s+pt\.?\s*$", re.IGNORECASE)
+_OPERATORS = (("pawan", "PAWAN TRAVELS"), ("baba", "BABA TRAVELS"))
+
+
+def _snap_operator(value: str) -> str:
+    """Drop a leaked ", INDORE PT" address tail, then snap to the printed canonical form when the
+    text names exactly ONE known operator. Unknown or two-operator text is left as read."""
+    v = _OPERATOR_TAIL_RE.sub("", value).strip()
+    hits = [canon for key, canon in _OPERATORS if key in v.lower()]
+    # A clean case-variant ("Baba Travels") is left as the model printed it; only noisy text snaps.
+    return hits[0] if len(hits) == 1 and v.lower() != hits[0].lower() else v
+
+
 def correct_amount_format(value: str | None) -> tuple[str, bool]:
     corrected, auto, _ = _clean_amount(value)
     return corrected, auto
@@ -340,12 +356,15 @@ EXTRACTION_VALUE_FIELDS = CORE_FIELDS + OPTIONAL_FIELDS
 _AMOUNT_FIELDS = ("packageCount", "freight", "deliveryCharge", "demurrage", "sgst", "cgst", "igst", "totalAmount")
 _GSTIN_FIELDS = ("operatorGstin", "consignorGstin", "consigneeGstin")
 _PHONE_FIELDS = ("consignorPhone", "consigneePhone")
+# Free-text fields flagged (never rewritten) when a digit is mixed in; preparedBy has its own check.
+_TEXT_REVIEW_FIELDS = ("consignorName", "consigneeName", "toPlace", "fromPlace", "preparedBy")
 
 EXTRACTION_FLAG_FIELDS = (
     "dateAutoCorrected",
     "dateNeedsReview",
     "receiptNumberNeedsReview",
     "timeNeedsReview",
+    *(f"{f}NeedsReview" for f in _TEXT_REVIEW_FIELDS),
     "operatorGstinNeedsReview",
     "consignorGstinNeedsReview",
     "consigneeGstinNeedsReview",
@@ -380,6 +399,17 @@ def build_extraction_result(
     out: dict[str, Any] = {}
     for field in EXTRACTION_VALUE_FIELDS:
         out[field] = _clean_text_field(parsed.get(field), field)
+
+    out["operatorName"] = _snap_operator(out["operatorName"])
+    out["deliveryAddress"] = _PHONE_GLUED_RE.sub(lambda m: " " + m.group(1), out["deliveryAddress"])
+    prepared = out["preparedBy"]
+    if len(prepared) > 1 and prepared[0] == "(" and prepared[-1] == ")":
+        out["preparedBy"] = prepared = prepared[1:-1].strip()
+    out["preparedByNeedsReview"] = bool(prepared) and _PREPARED_BY_OK_RE.match(prepared) is None
+    for field in ("consignorName", "consigneeName", "toPlace", "fromPlace"):
+        out[f"{field}NeedsReview"] = any(c.isdigit() for c in out[field])
+    if "baba" in out["operatorName"].lower() and out["fromPlace"]:
+        out["fromPlaceNeedsReview"] = True  # Baba receipts never print a From place
 
     # Group 1: a time baked into the date text moves to `time` (only if empty), then month-name
     # and misread-slash repairs; a Baba receipt never prints a month name -> suspicious.

@@ -215,3 +215,11 @@ Snapshot measured: 6c5a50a (master before Tasks A/B/C/E landed). Run A = 20 sing
 - Brutal/break tests: 2862S, O8625, PP1234, P123, 1234, P9X250, PD1234, 02/2025, 703/202, label-only "GrNo" -> blank.
 - Decision taken (flag if you disagree): "digit part" read as the whole run after the P (P9O25O -> P90250), not only the first char. A P-fix is silent (no receiptNumberAutoCorrected flag exists; not added).
 - 59 passed in test_deterministic_rules; related ocr/warnings tests 103 passed.
+
+### Deterministic rules - Group 3: text fields (2026-11-13)
+- Found: no checks on text fields; deliveryAddress "MAYARAMJI8087536777" glued letters to phone in every Pawan OCR row (all 6); no flag existed for names/places/preparedBy.
+- Failing test first: test_deterministic_rules.py Group 3 block.
+- Fix (extraction.py): letters+exact-10-digit run gets a space (11/9-digit runs untouched); preparedBy surrounding "( )" stripped, flagged unless letters/spaces/dots only; consignorName/consigneeName/toPlace/fromPlace flagged on any digit (never rewritten); Baba + non-empty fromPlace flagged; operatorName: ", INDORE PT" tail dropped, and a value naming exactly one known operator snaps to "PAWAN TRAVELS"/"BABA TRAVELS". NEW additive flags: consignorNameNeedsReview, consigneeNameNeedsReview, toPlaceNeedsReview, fromPlaceNeedsReview, preparedByNeedsReview (no existing flag could carry these); added to documents/correction.py NEEDS_REVIEW_FIELDS so manual edits clear them.
+- Iteration (shown, not hidden): first version snapped "Baba Travels" -> "BABA TRAVELS", which broke the existing test_extraction end-to-end expectation. Narrowed: a clean case-variant is left as read (every downstream comparison is case-insensitive anyway); only noisy text snaps. NEEDS OWNER DECISION: if you want ground-truth casing forced, flip that one condition and update test_extraction.
+- Existing test fixture changed: test_reprocess_reset.py used receiptNumber "TR/2526/000123" (ACKN leftover, not a Pawan/Baba shape) which Group 2 now correctly flags; fixture now "28625".
+- Brutal tests: 11/9-digit runs, unbalanced parens, digits in preparedBy, "K1INGELBERG 1ND1A" in all four fields, two-operator name "Pawan Baba Travels" not snapped, unknown "ELSLASA TRAVELS"/"Veer Travels" untouched, Baba rules see the snapped name. 236 passed across touched ocr+documents tests.

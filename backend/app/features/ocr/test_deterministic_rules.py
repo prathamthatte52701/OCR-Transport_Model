@@ -138,3 +138,66 @@ def test_other_shapes_flagged_value_kept(val):
 
 def test_label_only_becomes_blank_unflagged():
     assert build({"receiptNumber": "GrNo"})["receiptNumber"] == ""
+
+
+# ---------------- GROUP 3: text fields ----------------
+
+
+@pytest.mark.parametrize("raw,want", [
+    ("MAYARAM JI8087536777", "MAYARAM JI 8087536777"),
+    ("MAYARAMJI8087536777", "MAYARAMJI 8087536777"),
+    ("MAYARAM JI 8087536777", "MAYARAM JI 8087536777"),   # already spaced: untouched
+    ("Veer Travels Opp Vishva Hotel Ctm Cross Road", "Veer Travels Opp Vishva Hotel Ctm Cross Road"),
+    ("Shop 12 Main Rd", "Shop 12 Main Rd"),
+    ("JI80875367771", "JI80875367771"),                    # 11 digits is not a phone: untouched
+    ("JI808753677", "JI808753677"),                         # 9 digits: untouched
+])
+def test_delivery_address_phone_space(raw, want):
+    assert build({"deliveryAddress": raw})["deliveryAddress"] == want
+
+
+@pytest.mark.parametrize("raw,want,flag", [
+    ("(PAWAN)", "PAWAN", False), ("PAWAN", "PAWAN", False), ("(Shresth Sharma)", "Shresth Sharma", False),
+    ("A. K. Sen", "A. K. Sen", False), ("(PAWAN", "(PAWAN", True), ("PAWAN)", "PAWAN)", True),
+    ("PAWAN2", "PAWAN2", True), ("(Rahul 5)", "Rahul 5", True), ("Al0k Sen", "Al0k Sen", True),
+])
+def test_prepared_by(raw, want, flag):
+    out = build({"preparedBy": raw})
+    assert out["preparedBy"] == want and out["preparedByNeedsReview"] is flag
+
+
+@pytest.mark.parametrize("field", ["consignorName", "consigneeName", "toPlace", "fromPlace"])
+def test_digit_contamination_flagged_never_fixed(field):
+    out = build({field: "K1INGELBERG 1ND1A"})
+    assert out[field] == "K1INGELBERG 1ND1A" and out[f"{field}NeedsReview"] is True
+    out = build({field: "KLINGELBERG INDIA"})
+    assert out[field] == "KLINGELBERG INDIA" and out[f"{field}NeedsReview"] is False
+    assert build({})[f"{field}NeedsReview"] is False
+
+
+def test_baba_from_place_must_be_empty():
+    assert build({"operatorName": "BABA TRAVELS", "fromPlace": "INDORE"})["fromPlaceNeedsReview"] is True
+    assert build({"operatorName": "BABA TRAVELS", "fromPlace": ""})["fromPlaceNeedsReview"] is False
+    assert build({"operatorName": "PAWAN TRAVELS", "fromPlace": "INDORE"})["fromPlaceNeedsReview"] is False
+    assert build({"operatorName": "", "fromPlace": "INDORE"})["fromPlaceNeedsReview"] is False
+
+
+@pytest.mark.parametrize("raw,want", [
+    ("Baba Travels", "Baba Travels"),                 # clean case-variant: left as read
+    ("BABA TRAVELS, INDORE PT", "BABA TRAVELS"),
+    ("pawan travels , Indore PT.", "pawan travels"), ("Pawan", "PAWAN TRAVELS"),
+    ("Baba Travel", "BABA TRAVELS"), ("PAWAN TRAVELS", "PAWAN TRAVELS"),
+    ("ELSLASA TRAVELS", "ELSLASA TRAVELS"),           # unknown: never guessed
+    ("Veer Travels", "Veer Travels"),
+])
+def test_operator_name_snap(raw, want):
+    assert build({"operatorName": raw})["operatorName"] == want
+
+
+def test_operator_both_names_not_snapped():
+    assert build({"operatorName": "Pawan Baba Travels"})["operatorName"] == "Pawan Baba Travels"
+
+
+def test_baba_rules_see_snapped_operator():
+    out = build({"operatorName": "Baba Travels, INDORE PT", "date": "05 MAR 2025"})
+    assert out["dateNeedsReview"] is True

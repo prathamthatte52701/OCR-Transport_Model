@@ -80,7 +80,7 @@ def _const(res: dict[str, Any]) -> Callable[[str], Any]:
 
 def result(**over: Any) -> dict[str, Any]:
     base = ex.build_extraction_result(
-        {"receiptNumber": "TR/2526/000123", "operatorName": "ACME", "date": "01/01/2026"}
+        {"receiptNumber": "28625", "operatorName": "ACME", "date": "01/01/2026"}
     )
     return {**base, **over}
 
