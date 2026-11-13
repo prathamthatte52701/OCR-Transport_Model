@@ -64,6 +64,29 @@ Shown on the review page as a position + a short reason, never blocking:
 8. Possible duplicate: another document with the same operator + receipt number + date already
    exists for this user
 
+## Deterministic post-processing rules
+
+After the AI returns the raw fields, `backend/app/features/ocr/extraction.py`
+(`build_extraction_result`) applies pure-Python rules (no AI, no I/O). The principle: **flag when
+unsure, rewrite only when the repair is mechanically certain.** Names and places are never
+spelling-corrected; digit contamination in free text is only flagged.
+
+- Date/time: month-name dates ("05 MAR 2026") become DD/MM/YYYY, a time baked into the date moves
+  to an empty `time`, a slash misread as 7/1 is repaired only if the result is a real date; times
+  normalise to "H:MM AM/PM" or "HH:MM:SS" and out-of-range values are flagged. A month-name date on
+  a Baba receipt is flagged.
+- Receipt number: stray labels ("GrNo") are stripped; valid shapes are 5 digits, P+4-5 digits, or 6
+  digits (thousands commas kept as printed); O/S/l to 0/5/1 only in the digits after a leading P;
+  anything else is flagged.
+- Text: space inserted before a glued 10-digit phone in the delivery address, preparedBy
+  parentheses stripped, digits in names/places/preparedBy flagged, Baba `fromPlace` must be empty,
+  operator name snapped only when noisy.
+- GST/phone: GSTIN mod-36 checksum, with a single-character OCR-swap repair only when exactly one
+  swap validates; phone 91/0 prefixes stripped; SGST must equal CGST and IGST excludes SGST/CGST.
+
+Tests: `backend/app/features/ocr/test_deterministic_rules.py`. Offline proof against the stored
+20-image results: `spec/replay_rules_proof.py` (see `LOOP_LOG.md`).
+
 ## Accuracy
 
 Measured against 18 unique hand-verified receipts (`spec/ground_truth.json`), scored two ways:

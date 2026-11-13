@@ -7,6 +7,7 @@ distinction does not exist for a receipt, unlike ACKN's "not read yet" vs "confi
 absent"). Core fields are the ones present on most receipts; optional fields are everything
 else. Accuracy reporting always splits core vs optional (spec section 5/15)."""
 
+import difflib
 import math
 import re
 from datetime import date as date_type
@@ -26,9 +27,6 @@ _AMOUNT_TRAILING_WORDS_RE = re.compile(r"\b(only)\b\s*", re.IGNORECASE)
 _TWO_DIGIT_YEAR_MIN, _TWO_DIGIT_YEAR_MAX = 2000, 2099
 GSTIN_RE = re.compile(r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$")
 PHONE_RE = re.compile(r"^\d{10}$")
-# A receipt number must have at least one letter-or-digit run of reasonable length; this is a
-# shape check only (never changed or rejected), matching spec item 7 ("looks incomplete").
-RECEIPT_NUMBER_SHAPE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ,/-]{1,19}$")
 # A plain amount: digits only, optional one decimal point with 1-2 places (commas/currency
 # symbols are stripped before this check runs).
 AMOUNT_RE = re.compile(r"^\d+(\.\d{1,2})?$")
@@ -115,6 +113,126 @@ def _corrected_date(raw_date: str | None) -> tuple[str, bool]:
     return raw[:_MAX_FIELD_LENGTH], False
 
 
+# ---- Group 1: date/time deterministic repairs (flag when unsure, rewrite only when certain) ----
+_MONTH_FULL = ("january", "february", "march", "april", "may", "june", "july", "august",
+               "september", "october", "november", "december")
+_DATE_TIME_SPLIT_RE = re.compile(
+    r"^(.*\d.*?)[\s,]+(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AaPp]\.?\s?[Mm]\.?)?)$")
+_DATE_MONTHNAME_RE = re.compile(r"^(\d{1,2})[\s.\-/,]*([A-Za-z0-9]{3,9})[\s.\-/,]*(\d{4}|\d{2})$")
+# a "/" read as 7 or 1: DD?MM/YYYY or DD/MM?YYYY
+_DATE_SLASH_MISREAD_RES = (
+    re.compile(r"^(\d{2})[71](\d{2})/(\d{4})$"),
+    re.compile(r"^(\d{2})/(\d{2})[71](\d{4})$"),
+)
+_TIME_12H_RE = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AaPp])\.?\s?[Mm]\.?$")
+_TIME_24H_RE = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2}))?$")
+
+
+def _resolve_month(token: str) -> tuple[int | None, bool]:
+    """(month 1-12 or None, exact). A noisy name resolves only when exactly ONE month is a
+    single-letter miss (3 letters) or a >=0.8 close match (longer); ambiguity -> None."""
+    t = token.lower().replace("0", "o")
+    for i, full in enumerate(_MONTH_FULL, 1):
+        if t == full or t == full[:3] or (i == 9 and t == "sept"):
+            return i, True
+    if len(t) == 3:
+        hits = [i for i, full in enumerate(_MONTH_FULL, 1) if sum(a != b for a, b in zip(t, full[:3])) == 1]
+    else:
+        hits = [i for i, full in enumerate(_MONTH_FULL, 1) if difflib.SequenceMatcher(None, t, full).ratio() >= 0.8]
+    return (hits[0], False) if len(hits) == 1 else (None, False)
+
+
+def _real_date(d: int, m: int, y: int) -> str | None:
+    if not 2000 <= y <= 2100:
+        return None
+    try:
+        datetime(y, m, d)
+    except ValueError:
+        return None
+    return f"{d:02d}/{m:02d}/{y:04d}"
+
+
+def _repair_date(raw: str) -> tuple[str, bool, bool]:
+    """(date text, auto_corrected, month_name_style). Only returns a rewritten value when it is a
+    real calendar date; otherwise the input comes back unchanged."""
+    if normalize_date_to_ddmmyyyy(raw):
+        return raw, False, False
+    m = _DATE_MONTHNAME_RE.match(raw)
+    if m and re.search(r"[A-Za-z]", m.group(2)):
+        month, exact = _resolve_month(m.group(2))
+        y = int(m.group(3))
+        y = y + 2000 if len(m.group(3)) == 2 else y
+        fixed = _real_date(int(m.group(1)), month, y) if month else None
+        return (fixed, not exact, True) if fixed else (raw, False, True)
+    for rx in _DATE_SLASH_MISREAD_RES:
+        m = rx.match(raw)
+        if m:
+            fixed = _real_date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            if fixed:
+                return fixed, True, False
+    return raw, False, False
+
+
+def normalize_time(raw: str) -> tuple[str, bool]:
+    """(value, needs_review). 'H:MM AM/PM' for 12-hour, 'HH:MM[:SS]' for 24-hour; out-of-range
+    or unrecognised text is returned unchanged and flagged."""
+    t = raw.strip()
+    m = _TIME_12H_RE.match(t)
+    if m:
+        h, mi, sec = int(m.group(1)), m.group(2), m.group(3)
+        if 1 <= h <= 12 and int(mi) < 60 and (sec is None or int(sec) < 60):
+            return f"{h}:{mi}{':' + sec if sec else ''} {m.group(4).upper()}M", False
+        return raw, True
+    m = _TIME_24H_RE.match(t)
+    if m:
+        h, mi, sec = int(m.group(1)), m.group(2), m.group(3)
+        if h <= 23 and int(mi) < 60 and (sec is None or int(sec) < 60):
+            return f"{h:02d}:{mi}{':' + sec if sec else ''}", False
+    return raw, bool(t)
+
+
+# ---- Group 2: receipt number ----
+_RECEIPT_LABEL_RE = re.compile(r"^\s*(?:receipt\s*no|gr\s*no|r\s*no)\b\.?\s*[:\-]?\s*|^\s*(?:gr|r)\s*no(?=\d)\.?\s*", re.IGNORECASE)
+# Pawan = 5 digits; Baba = P + 4-5 digits or 6 digits (optionally printed with thousands commas).
+_RECEIPT_VALID_RES = (
+    re.compile(r"^\d{5}$"), re.compile(r"^P\d{4,5}$"), re.compile(r"^\d{6}$"),
+    re.compile(r"^\d{1,3}(,\d{2,3})+$"),
+)
+_P_DIGIT_CONFUSION = str.maketrans("OSl", "051")
+
+
+def _clean_receipt_number(value: str) -> tuple[str, bool]:
+    """(value, needs_review). Strips a leftover label ("GrNo28625"); fixes O/S/l -> 0/5/1 only in
+    the digit part of a "P"-prefixed number; everything else unrecognised is kept and flagged."""
+    v = _RECEIPT_LABEL_RE.sub("", value, count=1).strip() if value else ""
+    if not v:
+        return "", False
+    if v[0] == "P" and not v[1:].isdigit():
+        fixed = "P" + v[1:].translate(_P_DIGIT_CONFUSION)
+        if fixed[1:].isdigit():
+            v = fixed
+    ok = any(rx.match(v) for rx in _RECEIPT_VALID_RES)
+    if ok and "," in v and len(v.replace(",", "")) != 6:
+        ok = False
+    return v, not ok
+
+
+# ---- Group 3: text fields ----
+_PHONE_GLUED_RE = re.compile(r"(?<=[A-Za-z])(\d{10})(?!\d)")
+_PREPARED_BY_OK_RE = re.compile(r"^[A-Za-z .]+$")
+_OPERATOR_TAIL_RE = re.compile(r"[,\s]*indore\s+pt\.?\s*$", re.IGNORECASE)
+_OPERATORS = (("pawan", "PAWAN TRAVELS"), ("baba", "BABA TRAVELS"))
+
+
+def _snap_operator(value: str) -> str:
+    """Drop a leaked ", INDORE PT" address tail, then snap to the printed canonical form when the
+    text names exactly ONE known operator. Unknown or two-operator text is left as read."""
+    v = _OPERATOR_TAIL_RE.sub("", value).strip()
+    hits = [canon for key, canon in _OPERATORS if key in v.lower()]
+    # A clean case-variant ("Baba Travels") is left as the model printed it; only noisy text snaps.
+    return hits[0] if len(hits) == 1 and v.lower() != hits[0].lower() else v
+
+
 def correct_amount_format(value: str | None) -> tuple[str, bool]:
     corrected, auto, _ = _clean_amount(value)
     return corrected, auto
@@ -160,15 +278,54 @@ def normalize_gstin(value: str | None) -> tuple[str, bool]:
     return cleaned, GSTIN_RE.match(cleaned) is None
 
 
+_GSTIN_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+# OCR confusion pairs, each direction (O<->0, I<->1, S<->5, B<->8, Z<->2).
+_GSTIN_SWAPS = {"O": "0", "0": "O", "I": "1", "1": "I", "S": "5", "5": "S", "B": "8", "8": "B", "Z": "2", "2": "Z"}
+
+
+def gstin_checksum_ok(g: str) -> bool:
+    """Public mod-36 check-digit algorithm over the first 14 characters."""
+    if len(g) != 15 or any(c not in _GSTIN_CHARS for c in g):
+        return False
+    total = 0
+    for i, c in enumerate(g[:14]):
+        v = _GSTIN_CHARS.index(c) * (1 if i % 2 == 0 else 2)
+        total += v // 36 + v % 36
+    return _GSTIN_CHARS[(36 - total % 36) % 36] == g[14]
+
+
+def check_gstin(cleaned: str) -> tuple[str, bool, bool]:
+    """(value, auto_corrected, needs_review) for an already-uppercased GSTIN. A valid shape +
+    checksum passes. Otherwise a repair happens only when exactly ONE single-character
+    confusion swap yields a valid shape AND checksum; no or several candidates -> flag only."""
+    if not cleaned:
+        return "", False, False
+    if GSTIN_RE.match(cleaned) and gstin_checksum_ok(cleaned):
+        return cleaned, False, False
+    fixes = set()
+    if len(cleaned) == 15:
+        for i, c in enumerate(cleaned):
+            swap = _GSTIN_SWAPS.get(c)
+            cand = cleaned[:i] + swap + cleaned[i + 1:] if swap else None
+            if cand and GSTIN_RE.match(cand) and gstin_checksum_ok(cand):
+                fixes.add(cand)
+    if len(fixes) == 1:
+        return fixes.pop(), True, False
+    return cleaned, False, True
+
+
 def normalize_phone(value: str | None) -> tuple[str, bool]:
-    """Digits only (spaces/dashes stripped); 0000000000 is kept exactly and accepted. Returns
-    (value, needs_review)."""
+    """Digits only (spaces/dashes stripped). A leading 91 (12 digits) or 0 (11 digits) is dropped.
+    Valid = 10 digits starting 6-9, or an all-zero placeholder (printed as 0000000000, but the
+    ground truth also has "00" / 9 zeros - kept valid, never flagged). Returns (value, needs_review)."""
     if not value or not isinstance(value, str):
         return "", False
     digits = re.sub(r"[^\d]", "", value.strip())
     if not digits:
         return "", False
-    return digits, PHONE_RE.match(digits) is None
+    if len(digits) == 12 and digits.startswith("91") or len(digits) == 11 and digits.startswith("0"):
+        digits = digits[-10:]
+    return digits, not (PHONE_RE.match(digits) and digits[0] in "6789" or set(digits) == {"0"})
 
 
 def _clean_text_field(value: Any, field: str) -> str:
@@ -238,16 +395,21 @@ EXTRACTION_VALUE_FIELDS = CORE_FIELDS + OPTIONAL_FIELDS
 _AMOUNT_FIELDS = ("packageCount", "freight", "deliveryCharge", "demurrage", "sgst", "cgst", "igst", "totalAmount")
 _GSTIN_FIELDS = ("operatorGstin", "consignorGstin", "consigneeGstin")
 _PHONE_FIELDS = ("consignorPhone", "consigneePhone")
+# Free-text fields flagged (never rewritten) when a digit is mixed in; preparedBy has its own check.
+_TEXT_REVIEW_FIELDS = ("consignorName", "consigneeName", "toPlace", "fromPlace", "preparedBy")
 
 EXTRACTION_FLAG_FIELDS = (
     "dateAutoCorrected",
     "dateNeedsReview",
     "receiptNumberNeedsReview",
+    "timeNeedsReview",
+    *(f"{f}NeedsReview" for f in _TEXT_REVIEW_FIELDS),
     "operatorGstinNeedsReview",
     "consignorGstinNeedsReview",
     "consigneeGstinNeedsReview",
     "consignorPhoneNeedsReview",
     "consigneePhoneNeedsReview",
+    *(f"{f}AutoCorrected" for f in _GSTIN_FIELDS),
     *(f"{f}AutoCorrected" for f in _AMOUNT_FIELDS),
     *(f"{f}NeedsReview" for f in _AMOUNT_FIELDS),
 )
@@ -278,12 +440,34 @@ def build_extraction_result(
     for field in EXTRACTION_VALUE_FIELDS:
         out[field] = _clean_text_field(parsed.get(field), field)
 
-    date, out["dateAutoCorrected"] = _corrected_date(out["date"])
+    out["operatorName"] = _snap_operator(out["operatorName"])
+    out["deliveryAddress"] = _PHONE_GLUED_RE.sub(lambda m: " " + m.group(1), out["deliveryAddress"])
+    prepared = out["preparedBy"]
+    if len(prepared) > 1 and prepared[0] == "(" and prepared[-1] == ")":
+        out["preparedBy"] = prepared = prepared[1:-1].strip()
+    out["preparedByNeedsReview"] = bool(prepared) and _PREPARED_BY_OK_RE.match(prepared) is None
+    for field in ("consignorName", "consigneeName", "toPlace", "fromPlace"):
+        out[f"{field}NeedsReview"] = any(c.isdigit() for c in out[field])
+    if "baba" in out["operatorName"].lower() and out["fromPlace"]:
+        out["fromPlaceNeedsReview"] = True  # Baba receipts never print a From place
+
+    # Group 1: a time baked into the date text moves to `time` (only if empty), then month-name
+    # and misread-slash repairs; a Baba receipt never prints a month name -> suspicious.
+    split = _DATE_TIME_SPLIT_RE.match(out["date"])
+    if split:
+        out["date"] = split.group(1).strip()
+        out["time"] = out["time"] or split.group(2).strip()
+    out["date"], repaired, month_named = _repair_date(out["date"])
+    date, auto = _corrected_date(out["date"])
+    out["dateAutoCorrected"] = auto or repaired
     out["date"] = date
     if re.match(r"^\d{2}/\d{2}/\d{4}$", date) and normalize_date_to_ddmmyyyy(date):
         out["dateNeedsReview"] = date_implausible(date, today or now_ist().date())
     else:
         out["dateNeedsReview"] = bool(date)  # non-empty but unparseable -> flag for review
+    if month_named and "baba" in out["operatorName"].lower():
+        out["dateNeedsReview"] = True
+    out["time"], out["timeNeedsReview"] = normalize_time(out["time"]) if out["time"] else ("", False)
 
     for field in _AMOUNT_FIELDS:
         corrected, auto, review = _clean_amount(out[field])
@@ -315,9 +499,23 @@ def build_extraction_result(
         out["totalAmountNeedsReview"] = True
 
     for field in _GSTIN_FIELDS:
-        value, needs_review = normalize_gstin(out[field])
-        out[field] = value
-        out[f"{field}NeedsReview"] = needs_review
+        value, _ = normalize_gstin(out[field])
+        out[field], out[f"{field}AutoCorrected"], out[f"{field}NeedsReview"] = check_gstin(value)
+
+    # GST business rules: SGST == CGST; IGST and CGST/SGST are mutually exclusive.
+    def _num(f: str) -> float | None:
+        try:
+            return float(out[f]) if out[f] else None
+        except ValueError:
+            return None
+
+    sgst, cgst, igst = _num("sgst"), _num("cgst"), _num("igst")
+    if sgst is not None and cgst is not None and sgst != cgst:
+        out["sgstNeedsReview"] = out["cgstNeedsReview"] = True
+    if igst and (sgst or cgst):
+        out["igstNeedsReview"] = True
+        out["sgstNeedsReview"] |= bool(sgst)
+        out["cgstNeedsReview"] |= bool(cgst)
 
     for field in _PHONE_FIELDS:
         value, needs_review = normalize_phone(out[field])
@@ -332,8 +530,7 @@ def build_extraction_result(
         if m:
             out["packageCount"], out["packageDescription"] = m.group(1), m.group(2).strip()
 
-    receipt = out["receiptNumber"]
-    out["receiptNumberNeedsReview"] = bool(receipt) and RECEIPT_NUMBER_SHAPE_RE.match(receipt) is None
+    out["receiptNumber"], out["receiptNumberNeedsReview"] = _clean_receipt_number(out["receiptNumber"])
 
     return out
 
