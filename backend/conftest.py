@@ -21,7 +21,26 @@ os.environ["MONGO_DB_NAME"] = SESSION_TEST_DB
 # python-jose) be verified forever, and never involves the real secret.
 os.environ["JWT_SECRET"] = "test-only-jwt-secret-for-pytest-0123456789abcdef"
 
+import motor.motor_asyncio as _motor  # noqa: E402
+import pymongo as _pymongo  # noqa: E402
+
+import fake_mongo  # noqa: E402
+if not os.path.exists(os.path.join(os.path.dirname(__file__), ".env")):
+    # no .env (fresh checkout/CI): the fake ignores the URI, it only has to be non-empty
+    os.environ.setdefault("MONGO_URI", "mongodb://fake-test-host.invalid:27017/")
+
 from app.core.config import DEFAULT_DB_NAME, settings  # noqa: E402
+
+# Default: an in-process fake Mongo (fake_mongo.py, same approach as the sibling CONSIGNOR MODEL
+# project) replaces Motor/PyMongo/GridFS so normal tests never touch Atlas. Tests marked
+# `@pytest.mark.live` get the real classes back (see the `db` fixture) and run against the real
+# "_test" database; they are skipped unless `-m live` is passed (pyproject addopts).
+REAL_CLIENT = _motor.AsyncIOMotorClient
+REAL_BUCKET = _motor.AsyncIOMotorGridFSBucket
+_LIVE_USED = False
+_motor.AsyncIOMotorClient = fake_mongo.FakeAsyncMongoClient  # type: ignore[misc,assignment]
+_motor.AsyncIOMotorGridFSBucket = fake_mongo.FakeGridFSBucket  # type: ignore[misc,assignment]
+_pymongo.MongoClient = fake_mongo.FakeSyncMongoClient  # type: ignore[misc,assignment]
 
 if not settings.mongo_db_name.endswith("_test"):  # pragma: no cover - hard stop
     raise SystemExit(f"Refusing to run tests against DB '{settings.mongo_db_name}'")
@@ -51,6 +70,12 @@ def safe_to_drop(name: Any, real_name: Any) -> bool:
     return name.lower() not in _NEVER_DROP and name.lower() != real_name.lower()
 
 
+def _real_sync_client() -> Any:
+    from pymongo.mongo_client import MongoClient
+
+    return MongoClient
+
+
 def drop_session_db(
     expected: str, current: Any, real_name: str, drop: Callable[[str], Any]
 ) -> bool:
@@ -66,11 +91,11 @@ def drop_session_db(
 
 def pytest_sessionfinish(session: Any, exitstatus: Any) -> None:
     """The db fixture only empties collections, so each session would leave its (now empty)
-    test database on Atlas. Drop exactly the one this session used."""
+    test database on Atlas. Drop exactly the one this session used (only if a live test ran)."""
+    if not _LIVE_USED:
+        return
     try:
-        from pymongo import MongoClient
-
-        client: Any = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=10000)
+        client: Any = _real_sync_client()(settings.mongo_uri, serverSelectionTimeoutMS=10000)
         try:
             drop_session_db(
                 SESSION_TEST_DB, settings.mongo_db_name, DEFAULT_DB_NAME, client.drop_database
@@ -85,9 +110,27 @@ def pytest_sessionfinish(session: Any, exitstatus: Any) -> None:
 TEST_PASSWORD = "Xq7!mZv#4Lp2"
 
 
+@pytest.fixture
+def real_motor_client() -> Any:
+    """The real Motor client class, for the few `live` tests that need a real server."""
+    return REAL_CLIENT
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _fresh_fake_state() -> None:
+    fake_mongo.STORE.clear_data()
+
+
 @pytest_asyncio.fixture
-async def db() -> AsyncIterator[Any]:
+async def db(request: pytest.FixtureRequest) -> AsyncIterator[Any]:
+    global _LIVE_USED
     assert settings.mongo_db_name.endswith("_test")
+    if request.node.get_closest_marker("live"):
+        from app.core import database as _dbmod
+
+        _LIVE_USED = True
+        request.getfixturevalue("monkeypatch").setattr(_dbmod, "AsyncIOMotorClient", REAL_CLIENT)
+        request.getfixturevalue("monkeypatch").setattr(_dbmod, "AsyncIOMotorGridFSBucket", REAL_BUCKET)
     await connect_to_mongo()
     database = get_database()
     try:

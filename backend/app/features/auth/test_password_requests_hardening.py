@@ -4,6 +4,7 @@ requests after a forced change, and change-password vs a concurrent admin write.
 from typing import Any
 
 from app.core import rate_limit
+from app.core.config import settings
 from app.features.auth import router as auth_router
 from app.features.auth.password_requests import sanitize_note
 from app.features.auth.test_password_requests_admin import (
@@ -79,7 +80,7 @@ async def test_change_password_refuses_to_overwrite_a_concurrent_admin_write(
         """The admin's temp-password write lands while the user's change is being prepared."""
         import pymongo
 
-        sync: Any = pymongo.MongoClient(auth_router.settings.mongo_uri)
+        sync: Any = pymongo.MongoClient(settings.mongo_uri)
         sync[db.name].users.update_one(
             {"_id": user.id},
             {"$set": {"passwordHash": "ADMIN-TEMP-HASH"}, "$inc": {"tokenVersion": 1}},

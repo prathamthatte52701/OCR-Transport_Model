@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from bson import ObjectId
-from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorGridFSBucket
+from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 from PIL import Image
 
 from app.core.config import settings
@@ -232,8 +232,8 @@ async def test_output_has_no_secrets(db: Any, make_user: Any, capsys: Any) -> No
 
 
 @pytest_asyncio.fixture
-async def sub_db() -> AsyncIterator[Any]:
-    client: Any = AsyncIOMotorClient(settings.mongo_uri)
+async def sub_db(real_motor_client: Any) -> AsyncIterator[Any]:
+    client: Any = real_motor_client(settings.mongo_uri)  # the subprocess uses the real server
     database = client[_guard(SUB_DB)]
     try:
         yield database
@@ -256,6 +256,7 @@ def _cli(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+@pytest.mark.live  # spawns a separate process, which cannot see the in-process fake DB
 async def test_cli_subprocess(sub_db: Any) -> None:
     await sub_db.users.insert_many(
         [
@@ -293,11 +294,9 @@ async def test_app_flow_after_wipe(
     monkeypatch.setattr(pipeline, "run_ocr", lambda _p, **_k: "OCR TEXT")
     monkeypatch.setattr(pipeline, "classify_page_orientation", lambda _b: (0, 1.0))
 
-    async def ai(document_type: str, _text: str) -> dict[str, Any]:
+    async def ai(_text: str, **_k: Any) -> dict[str, Any]:
         return dict(
-            ex.build_extraction_result(
-                document_type, {"number": "820000123", "date": "05/10/2026"}
-            )
+            ex.build_extraction_result({"receiptNumber": "TR/2526/000123", "date": "05/10/2026"})
         )
 
     monkeypatch.setattr(pipeline, "extract_header", ai)
@@ -322,7 +321,6 @@ async def test_app_flow_after_wipe(
         "/api/documents/upload",
         headers=h,
         files={"document": ("a.png", io.BytesIO(buf.getvalue()), "image/png")},
-        data={"documentType": "Delivery Challan"},
     )
     assert up.status_code == 201, up.text
     doc_id = ObjectId(up.json()["document"]["_id"])
@@ -334,5 +332,5 @@ async def test_app_flow_after_wipe(
         await asyncio.sleep(0.05)
     else:
         raise AssertionError(f"document never processed: {doc}")
-    assert doc["number"] == "820000123"
+    assert doc["receiptNumber"] == "TR/2526/000123"
     pipeline._reset_slot_for_tests()

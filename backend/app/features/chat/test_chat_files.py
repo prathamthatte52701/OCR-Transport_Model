@@ -373,12 +373,12 @@ async def test_access_rules(client: Any, make_user: Any, trio: Any) -> None:
     assert (await client.get(f"{BASE}/files/{'0' * 24}", headers=u.headers)).status_code == 404
 
 
-async def test_rejected_user_cannot_open(client: Any, db: Any, trio: Any) -> None:
+async def test_rejected_users_thread_not_openable_by_admin(client: Any, db: Any, trio: Any) -> None:
     u, adm, _ = trio
     r = await up(client, u, img_bytes(), to=adm)
     await db.users.update_one({"_id": u.id}, {"$set": {"status": "rejected"}})
     url = f"{BASE}/files/{r.json()['attachment']['id']}"
-    assert (await client.get(url, headers=u.headers)).status_code == 403  # approval gate
+    # (no approval gate on the owner any more - cc1a7d3 removed the approval flow)
     assert (await client.get(url, headers=adm.headers)).status_code == 404  # thread not openable
 
 

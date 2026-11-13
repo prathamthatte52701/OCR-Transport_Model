@@ -88,7 +88,6 @@ async def test_month_boundaries(
     assert r.status_code == 200, r.text
     expected = 0 if deleted else 1
     assert await db.documents.count_documents({"_id": doc_id}) == expected
-    assert await db.exportedrows.count_documents({"documentId": doc_id}) == expected
 
 
 @pytest.mark.parametrize("glob", [True, False])
@@ -102,7 +101,6 @@ async def test_multi_month_and_dec_vs_jan(client: Any, make_user: Any, db: Any, 
     assert r.status_code == 200, r.text
     left = {d["_id"] async for d in db.documents.find({})}
     assert left == {feb}
-    assert await db.exportedrows.count_documents({}) == 1
 
 
 async def test_user_purge_spares_other_user_and_global_hits_all(
@@ -183,4 +181,4 @@ async def test_dashboard_series_groups_by_ist_day(client: Any, make_user: Any, d
     assert s["days"][-2] == prev.isoformat()
     assert s["documents"][-1] == 1 and s["documents"][-2] == 2
     assert s["users"][-1] == 1 and s["users"][-2] == 1
-    assert s["exports"][-1] == 1 and s["exports"][-2] == 1
+    assert "exports" not in s  # the export feature does not exist in Transport OCR

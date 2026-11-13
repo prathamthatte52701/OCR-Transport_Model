@@ -259,7 +259,13 @@ EXTRACTION_DERIVED_FIELDS = (
 )
 
 
-def build_extraction_result(parsed: Any, today: date_type | None = None) -> dict:
+# "Fright"/"Freight"/"Frt" and OCR-noisy spellings ("Fraght", "Frieght", "FRIGHT:").
+FREIGHT_LABEL_RE = re.compile(r"\bfr[a-z]{0,2}g[hn]?t|\bfrt\b", re.IGNORECASE)
+
+
+def build_extraction_result(
+    parsed: Any, today: date_type | None = None, ocr_text: str | None = None
+) -> dict:
     """Applies a deterministic rule-based correction pass (OCR character-confusion fixes on
     numeric fields, date normalisation, GSTIN/phone shape flags) to the raw field dict already
     parsed from the AI response. Correction never invents a digit or letter - it only fixes a
@@ -289,13 +295,18 @@ def build_extraction_result(parsed: Any, today: date_type | None = None) -> dict
 
     # Baba-only rules (Baba has no separate delivery address, and a lone "Amount" gets copied
     # into both totalAmount and freight). Only fires when operatorName clearly says Baba.
-    # ponytail: raw OCR text is not available here, so rule 5 can't check for a "Fright" label;
-    # it clears freight whenever it equals totalAmount on a Baba receipt.
+    # Rule 5 (freight == totalAmount) only clears freight when the OCR text has no freight label
+    # at all; a printed "Fright" label means the value is real. No OCR text -> can't tell, so keep
+    # the value and flag it for a human.
     if "baba" in out["operatorName"].lower():
         if out["deliveryAddress"].strip().lower() == out["toPlace"].strip().lower():
             out["deliveryAddress"] = ""
         if out["freight"] and out["freight"] == out["totalAmount"]:
-            out["freight"] = ""
+            if ocr_text is None:
+                out["freightNeedsReview"] = True
+            elif not FREIGHT_LABEL_RE.search(ocr_text):
+                out["freight"] = ""
+                out["freightAutoCorrected"] = out["freightNeedsReview"] = False
 
     # A lone freight with no total and no other charge/tax: the total is probably missed.
     if out["freight"] and not any(
