@@ -149,3 +149,8 @@ Bisection of the hang (all with the same timeout flags):
 - test_change_password_refuses_to_overwrite_a_concurrent_admin_write: test used auth_router.settings (router never had it); now imports app.core.config.settings. Test-only fix.
 - test_get_ocr_failure: autouse 0.3s OCR timeouts raced the real run_ocr path (image decode, lazy paddle import); test now sets 120s/240s limits, so no wall-clock dependency. Passes (0.9-1.8s).
 - test_email_admin_only: likely cause (code reading, NOT reproduced on Atlas): audit lookup `find_one({"action": "user_email_changed"})` was unscoped on a DB shared by concurrent sessions that delete_many each other's rows. Now scoped to context.targetUserId and the DB is per-process fake. 5 consecutive runs: 6 passed each (1.27s, 1.18s, 1.20s, 1.24s, 2.07s).
+
+### Task C (2026-11-13) - Baba freight==total rule no longer wipes a real freight value
+- build_extraction_result(parsed, today=None, ocr_text=None); ai_extraction.extract_header passes header_text. Rule clears freight only when ocr_text has no freight label (FREIGHT_LABEL_RE: fright/freight/fraght/frieght/frt, case-insensitive, noise tolerant). ocr_text None -> keep value, freightNeedsReview=True. Pawan untouched.
+- Tests (test_code_checks.py): no label -> cleared; "Fright 100"/total 100 -> kept; Fraght, "Fright :", FRIGHT:, Freight, Frieght, Frt -> kept; None -> kept+review; Pawan x3 untouched; extract_header passthrough. 71 passed (code_checks+extraction+amount_review).
+- Ground truth (15 Baba receipts): 14 have freight "" and 1 (186798) has "0.00" vs total 140; none has freight==total, so the rule only fires on AI mis-copies where the OCR has no label, matching the truth. Not verified against real OCR text (no live OCR, out of scope).

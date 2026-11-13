@@ -47,4 +47,4 @@ async def extract_header(
             parsed = await ask()
         except ValueError:
             raise AIExtractionError(BAD_REPLY) from None
-    return build_extraction_result(parsed)
+    return build_extraction_result(parsed, ocr_text=header_text)
