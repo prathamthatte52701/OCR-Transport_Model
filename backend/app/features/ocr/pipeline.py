@@ -32,10 +32,12 @@ from app.features.ocr.preprocessing import (
     LARGE_TEXT_DET_LIMIT,
     LARGE_TEXT_DET_LIMIT_STEP,
     ORIENTATION_CHECK_STEP,
+    RED_INK_STEP,
     assess_and_preprocess,
     crop_header,
     crop_left_copy,
     get_pdf_header_text_or_image,
+    red_ink_variants,
 )
 from app.features.ocr.providers.errors import (
     NO_TEXT,
@@ -291,6 +293,80 @@ async def _classify_under_lock(png: bytes) -> tuple[int, float]:
     return await _run_in_slot(lambda: classify_page_orientation(png), OCR_TIMEOUT_SECONDS_IMAGE)
 
 
+async def _ocr_png(
+    image_bytes: bytes,
+    use_doc_orientation_classify: bool,
+    text_det_limit_side_len: int | None,
+    timeout: float,
+) -> str | None:
+    fd, tmp_path = tempfile.mkstemp(suffix=".png")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(image_bytes)
+        # Bad INPUT is not an engine failure: an undecodable image never reaches the engine
+        # (it decodes pictures with OpenCV, so check with OpenCV).
+        if cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR) is None:
+            raise ValueError("the image could not be decoded")
+        try:
+            text = await _run_in_slot(
+                lambda: run_ocr(
+                    tmp_path,
+                    use_doc_orientation_classify=use_doc_orientation_classify,
+                    text_det_limit_side_len=text_det_limit_side_len,
+                ),
+                timeout,
+            )
+        except TimeoutError:
+            raise OcrTimeoutError(f"timed out after {timeout:.0f}s") from None
+        except OcrStuckError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            engine_error = (
+                exc if isinstance(exc, OcrEngineError) else OcrEngineError.from_exception(exc)
+            )
+            if engine_error.file_caused:  # the engine could not read THIS file: no text
+                logger.error(
+                    f"OCR input problem: class={engine_error.cls_name} msg={engine_error.short}"
+                )
+                return None
+            _note_engine_failure(engine_error.cls_name)
+            raise engine_error from None
+        _note_engine_ok()
+        return text
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+async def _ocr_red_ink_page(
+    image_bytes: bytes,
+    use_doc_orientation_classify: bool,
+    text_det_limit_side_len: int | None,
+    timeout: float,
+) -> str | None:
+    """Red-ink (Baba) pages: the typed receipt number/date sit on the red print, so OCR a
+    red-channel gray copy and a dark-ink-only copy and merge them (reading order kept, one
+    comment line marks where the second copy starts). If the copies cannot be built or a pass
+    fails, fall back to the single original pass."""
+    try:
+        gray_png, ink_png = red_ink_variants(image_bytes)
+        texts = [
+            await _ocr_png(png, use_doc_orientation_classify, text_det_limit_side_len, timeout)
+            for png in (gray_png, ink_png)
+        ]
+    except OcrStuckError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"Red-ink OCR not used, single original pass instead: class={type(exc).__name__}")
+        return await _ocr_png(image_bytes, use_doc_orientation_classify, text_det_limit_side_len, timeout)
+    gray_text, ink_text = texts
+    if gray_text and ink_text:
+        return f"{gray_text}\n# source: dark-ink\n{ink_text}"
+    return gray_text or ink_text
+
+
 async def _extract_header_text(buffer: bytes, mime_type: str) -> str | None:
     """Returns the full-page OCR/text-layer text, or None on failure - receipt fields run
     across the whole page, unlike ACKN's header-only crop."""
@@ -333,46 +409,10 @@ async def _extract_header_text(buffer: bytes, mime_type: str) -> str | None:
             OCR_TIMEOUT_SECONDS_PDF if mime_type == "application/pdf" else OCR_TIMEOUT_SECONDS_IMAGE
         )
 
-        suffix = ".png"
-        fd, tmp_path = tempfile.mkstemp(suffix=suffix)
-        try:
-            with os.fdopen(fd, "wb") as f:
-                f.write(image_bytes)
-            # Bad INPUT is not an engine failure: an undecodable image never reaches the engine
-            # (it decodes pictures with OpenCV, so check with OpenCV).
-            if cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR) is None:
-                raise ValueError("the image could not be decoded")
-            try:
-                text = await _run_in_slot(
-                    lambda: run_ocr(
-                        tmp_path,
-                        use_doc_orientation_classify=use_doc_orientation_classify,
-                        text_det_limit_side_len=text_det_limit_side_len,
-                    ),
-                    timeout,
-                )
-            except TimeoutError:
-                raise OcrTimeoutError(f"timed out after {timeout:.0f}s") from None
-            except OcrStuckError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                engine_error = (
-                    exc if isinstance(exc, OcrEngineError) else OcrEngineError.from_exception(exc)
-                )
-                if engine_error.file_caused:  # the engine could not read THIS file: no text
-                    logger.error(
-                        f"OCR input problem: class={engine_error.cls_name} msg={engine_error.short}"
-                    )
-                    return None
-                _note_engine_failure(engine_error.cls_name)
-                raise engine_error from None
-            _note_engine_ok()
-            return text
-        finally:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+        ocr_page = _ocr_red_ink_page if RED_INK_STEP in preprocess_steps else _ocr_png
+        return await ocr_page(
+            image_bytes, use_doc_orientation_classify, text_det_limit_side_len, timeout
+        )
     except (OcrStuckError, OcrEngineError, OcrTimeoutError):
         raise
     except Exception as exc:  # noqa: BLE001

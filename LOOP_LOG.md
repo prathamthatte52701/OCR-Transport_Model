@@ -268,3 +268,26 @@ Snapshot measured: 6c5a50a (master before Tasks A/B/C/E landed). Run A = 20 sing
 | 22.01.41 | baba_p97829 | 791 | Y | N | 38.4 |
 | 22.01.42 (3) | pawan_gr28625 | 659 | Y | Y | 33.6 |
 | 22.01.54 (2) | baba_p98595 | 714 | Y | N | 29.0 |
+
+### Task 1: red-ink (Baba) pages - OCR red-channel + dark-ink copies and merge (2026-11-14)
+- Rule (general, one sentence): on a red-ink page the typed black row sits on red print/watermark, so OCR a red-channel gray copy and an Otsu dark-ink-only copy of the page and merge the two texts; every non-red page keeps its single original pass.
+- Option comparison, PaddleOCR only (no LLM), 16 Baba photos (15 receipts + the second photo of P98506), receipt number / date judged against spec/ground_truth.json (digits-only compare for the number, d/m/y with spaces tolerated for the date). Variants built from the crop that the live pipeline gives PaddleOCR (`current()` in scratch t1.py); my own run, re-done after a stopped agent left unverifiable numbers:
+
+| option | receipt no. found | date found | both | label words (10 labels x 16 photos) |
+|---|---|---|---|---|
+| (a) current pipeline output | 4/16 | 1/16 | 1/16 | 111 |
+| (b) red-channel gray | 4/16 | 2/16 | 1/16 | 102 |
+| (c) dark-ink only (Otsu on red channel) | 4/16 | 5/16 | 3/16 | 90 |
+| (d) b + c merged | 5/16 | 5/16 | 3/16 | 118 |
+
+  (d) wins on every count. a+c and a+b+c merges score the same as d on these three counts (5/5/3) but were not in the requested option list.
+- Implemented option (d): `preprocessing.py` marks a red-ink page with the marker step `RED_INK_STEP` (reusing `_is_red_ink_page`, pixels untouched, no re-encode) and `red_ink_variants()` builds the two copies; `pipeline.py::_ocr_red_ink_page` OCRs both under the OCR slot and returns `gray\n# source: dark-ink\ndark` (reading order kept, one comment line, no new fields). Any failure building or OCRing the copies falls back to the single original pass. OcrStuckError still propagates.
+- Tests (written first, failed with ImportError before the code): `backend/app/features/ocr/test_red_ink_ocr.py` - 9 tests (marker step, blue page never gets it, variants separate black ink from pale-red watermark, undecodable bytes refused, non-red page = one pass and text untouched, red = two passes merged in order with exactly one comment line, second pass empty keeps first text, variant-build failure falls back to the single original pass, both empty = None).
+- Related suites: `pytest app/features/ocr app/features/documents` -> `681 passed, 1 warning in 65.03s` (672 before + 9 new).
+- End-to-end real check (real `_extract_header_text`, no LLM) vs the Task 0 baseline texts:
+  - Pawan (4 photos: 22.01.33 (1), 33 (2), 33, 42 (3)): `cmp` says byte-for-byte IDENTICAL to the before text, and none contains the merge marker.
+  - Baba 16 photos, before -> after: receipt no. 4 -> 5, date 1 -> 4, both 1 -> 3, label words 111 -> 115. No photo got worse on receipt/date. Newly right: p97433 (no. + date), p97990 (date), p98347 (date).
+  - The 4 photos that were empty stay empty: baba_p98755, baba_p98635, baba_p98828, baba_p98595 -> 0/0 before and after. Their OCR text is 78 / 235 / 633 / 714 chars of mostly "BABA TRAVELS" watermark; none of the 4 variants recover a number or date from them. NOT fixed by Task 1. Four of them are also not even detected as red pages by the existing detector (red-pixel share 0.021 to 0.033 vs the 0.04 cut-off; Pawan is 0.0 at every threshold), so lowering the cut-off would add the extra passes there; not done because it would also change which preprocessing those pages get and nothing measured shows a gain for them.
+  - p97829 had a date in option (b) but is not detected as red (share 0.024), so it gets no gain in the pipeline.
+- Cost: 11 of the 16 Baba photos take the two-pass path. Wall time per photo, Task 0 -> now: +10.8, +12.5, +3.9, +9.7, +6.0, +5.6, +5.3, +7.9, +3.4, -4.5, -9.5 s (mean about +4.6 s; the single timings are noisy because the machine load differed between the two runs, so treat it as roughly +5 s per red page, one extra PaddleOCR pass).
+- Not verified: effect on the LLM-extracted fields (Task 7 measures that); only the raw OCR text was measured here.

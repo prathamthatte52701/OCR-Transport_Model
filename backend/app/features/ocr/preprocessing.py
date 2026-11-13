@@ -230,6 +230,7 @@ LARGE_TEXT_DET_LIMIT = 1600
 # rather than duplicated magic strings in both files.
 ORIENTATION_CHECK_STEP = "orientation_check:paddle_classifier"
 LARGE_TEXT_DET_LIMIT_STEP = "large_text:text_det_limit_bump"
+RED_INK_STEP = "red_ink_page"  # marker only: pipeline OCRs the red-channel + dark-ink copies
 
 
 def _decode(image_bytes: bytes) -> np.ndarray:
@@ -353,6 +354,19 @@ def _is_red_ink_page(img: np.ndarray) -> bool:
     return float(((r - np.maximum(g, b)) > _RED_DOMINANCE).mean()) > _RED_PIXEL_FRACTION
 
 
+def red_ink_variants(image_bytes: bytes) -> tuple[bytes, bytes]:
+    """(red-channel gray PNG, dark-ink-only PNG) for a red-ink page. Typed black ink has a low red
+    value while the red print and pink watermark stay high, so the red channel (and an Otsu cut
+    of it) lifts the typed row off the red background."""
+    img = _decode(image_bytes)
+    red = np.ascontiguousarray(img[..., 2])
+    _, ink = cv2.threshold(red, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return (
+        _encode(cv2.cvtColor(red, cv2.COLOR_GRAY2BGR)),
+        _encode(cv2.cvtColor(ink, cv2.COLOR_GRAY2BGR)),
+    )
+
+
 def _min_channel_gray(img: np.ndarray) -> np.ndarray:
     # min(B,G,R) is darkest for red ink AND black ink, but only mid-gray for the pale
     # pink watermark (its G/B stay high), so ink-vs-watermark contrast rises without
@@ -435,7 +449,10 @@ def assess_and_preprocess(image_bytes: bytes) -> tuple[bytes, list[str]]:
         # the red-ink page as-is for OCR until a real fix (e.g. a saturation-based
         # separation instead of min-channel) is found and verified against real photos,
         # not just the synthetic fixture this heuristic was tuned on.
-        pass
+        # The pixels stay untouched here; RED_INK_STEP tells pipeline.py to OCR the
+        # red_ink_variants() copies instead (measured on the 16 Baba photos: more receipt
+        # numbers/dates than the untouched crop - see LOOP_LOG).
+        steps.append(RED_INK_STEP)
     elif float(np.median(gray)) > _WHITE_PAPER_MEDIAN and (
         _midtone_fraction(gray) > _WATERMARK_MIDTONE_FRACTION
     ):
@@ -461,7 +478,7 @@ def assess_and_preprocess(image_bytes: bytes) -> tuple[bytes, list[str]]:
     # re-encode when a step actually modified img, so a crop that only trips
     # one of those two still comes back byte-identical rather than paying
     # for a pointless (pixel-identical) re-compression.
-    _marker_only_steps = {ORIENTATION_CHECK_STEP, LARGE_TEXT_DET_LIMIT_STEP}
+    _marker_only_steps = {ORIENTATION_CHECK_STEP, LARGE_TEXT_DET_LIMIT_STEP, RED_INK_STEP}
     if not any(step not in _marker_only_steps for step in steps):
         return image_bytes, steps
     return _encode(img), steps
