@@ -17,6 +17,7 @@ AUTO_CORRECTED_FIELDS = (
 NEEDS_REVIEW_FIELDS = (
     "date",
     "receiptNumber",
+    "time",
     "operatorGstin",
     "consignorGstin",
     "consigneeGstin",
