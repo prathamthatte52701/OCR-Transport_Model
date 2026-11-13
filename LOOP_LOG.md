@@ -119,3 +119,22 @@ Checklist of every feature. Tick after commit. Re-read this + spec at start of e
 - Browser-verified: edit updates DOM without reload (detail, upload review, admin); invalid date -> 400 + visible message (user detail, upload review, admin after fix); clearing Date -> "Date missing" warning on detail; admin edit (consignor, cleared date) visible in user app for same doc. No unexpected 4xx/5xx; only the deliberate invalid-date 400s.
 - Not verified: needs-review list filter after clearing (count seen, no per-row check); admin table row refresh behind the modal (modal covers it); admin success banner is behind the modal overlay (pre-existing, not changed).
 - Cleanup: zz_tr_u1 user, 3 documents, 3 GridFS files, 6 corrections, 17 audit logs deleted by id; zero leftovers confirmed.
+
+### Wave 3 - full backend pytest investigation (why it hung, 70+ min, before ~6-7 min)
+Setup: installed pytest-timeout. `--timeout=120/60 --timeout-method=thread -o faulthandler_timeout=120/60 --durations=25 -p no:cacheprovider`, test DB only (docintel_transport_test).
+
+5-phase run:
+- **Phase 1 (app/core + no-DB)**: 153 passed, 1 skipped, 108.55s. Baseline for the 3x-slower rule (threshold 326s).
+- **Phase 2 (app/features/ocr)**: 270 passed, 1 failed, 273.87s (within 3x). Failure: `test_get_ocr_failure` expected `OCR_ENGINE_ERROR`, got `OCR_STUCK` - a timing-sensitive test (artificial timeout boundary vs real paddle model load variance), not a hang, not investigated further this pass.
+- **Phase 3 (app/features/auth)**: 66 passed, 1 failed, 517.96s (~4.8x Phase 1, flagged per rule but finished normally - not a hang, just ~5s of real Atlas round-trip per test's db-fixture setup x 67 tests). Failure: `test_change_password_refuses_to_overwrite_a_concurrent_admin_write` - `AttributeError: module 'app.features.auth.router' has no attribute 'settings'`. This is a PRE-EXISTING test bug (same error logged earlier this session before any of today's work) - unrelated to any commit from this loop.
+- **Phase 4 (app/features/documents)**: HUNG. Killed after 32 min at near-zero CPU (88 CPU-seconds used over 32 min wall time = true I/O block, not a spin/deadlock in Python).
+- **Phase 5**: not reached.
+
+Bisection of the hang (all with the same timeout flags):
+- `--collect-only` on 10 of the 20 documents test files: 168 tests collected in 2.51s - collection itself is NOT where it hangs.
+- `test_download_all.py` alone: 12 passed in 125.17s. Fine.
+- `test_correction_integrity.py` alone (has the known 50-concurrent-request test): 14 passed in 147.74s. Fine.
+- Full `app/features/documents` (259 tests) under a hard OS-level `timeout 240`: killed at exit code 124 (SIGTERM, not a graceful finish). Last visible progress: `test_ai_failure_reprocess.py` (2/2) then stuck partway through `test_clear_field.py`'s run (27 dots shown, each field-clear test). pytest-timeout's own 60s per-test thread-based timeout did NOT fire / print a stack trace before the OS killed it at 240s.
+
+**Conclusion**: every file passes individually and quickly. The hang only appears after MANY sequential test-DB connect/disconnect cycles accumulate in one pytest process (conftest.py's `db` fixture opens a fresh motor client and closes it per test - by the time this happens deep into `test_clear_field.py` that's 30-40+ cycles in). pytest-timeout's thread-based interrupt cannot break it, which means the block is a genuine blocked socket/await at the I/O layer (a dead TCP connection to Atlas not being detected, or the connection pool getting into a bad state), not a Python-level deadlock in any code this session touched. Per the user's own decision rule ("if it reproduces regardless of commit, it's the environment/Atlas"): this is very likely environment/Atlas, not a bug introduced by the 23+ commits from this session - but the planned git-bisect-against-b37e807 comparison (which would need the SAME 70+ min hang to reproduce on old code too, to fully confirm) was not run yet due to time - flagging as **not verified** rather than claiming certainty.
+**Not fixed, not root-caused with 100% certainty.** Workaround that DOES work reliably: run tests per-module/per-file (as CLAUDE.md's own existing rule already says to do) rather than the whole suite in one process. No code change made. Full suite run still open as a task for next session, with the bisect-against-b37e807 step specifically still pending.
